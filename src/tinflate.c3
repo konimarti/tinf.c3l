@@ -36,14 +36,14 @@ macro ushort! read_le_ushort(stream)
 {
 	char lo_byte = stream.read_byte()!; // p[0]
 	char hi_byte = stream.read_byte()!; // p[1]
-	return (ushort)(hi_byte << 8 | lo_byte);
+	return (ushort)((ushort)hi_byte << 8 | (ushort)lo_byte);
 }
 
 fn void build_fixed_trees(TinfTree *lt, TinfTree *dt)
 {
 	ushort i;
 
-	lt.counts = {};
+	lt.counts[..] = 0;
 
 	lt.counts[7] = 24;
 	lt.counts[8] = 152;
@@ -69,7 +69,7 @@ fn void build_fixed_trees(TinfTree *lt, TinfTree *dt)
 	lt.max_sym = 285;
 
 	// build fixed distance tree
-	dt.counts = {};
+	dt.counts[..] = 0;
 	dt.counts[5] = 32;
 
 	for (i = 0; i < 32; i++)
@@ -87,7 +87,7 @@ fn void! build_tree(TinfTree *t, char[] lengths, uint num)
 
 	assert(num <= 288);
 
-	t.counts = {};
+	t.counts[..] = 0;
 
 	t.max_sym = -1;
 
@@ -109,6 +109,7 @@ fn void! build_tree(TinfTree *t, char[] lengths, uint num)
 	{
 		uint used = t.counts[i];
 
+		// check lengh contains no more codes than available
 		if (used > available) return TinfError.DATA_ERROR?;
 		available = 2 * (available - used);
 
@@ -150,7 +151,7 @@ fn void refill(TinfData *d, int num)
 	{
 		if (d.source != d.source_end)
 		{
-			d.tag |= *d.source++ << d.bitcount;
+			d.tag |= *(d.source++) << d.bitcount;
 		}
 		else
 		{
@@ -231,7 +232,7 @@ fn void! decode_trees(TinfData *d, TinfTree *lt, TinfTree *dt)
 	hlit = getbits_base(d, 5, 257);
 
 	// get 5 bits HDIST (1-32)
-	hlit = getbits_base(d, 5, 1);
+	hdist = getbits_base(d, 5, 1);
 
 	// get 4 bits HCLEN (4-19)
 	hclen = getbits_base(d, 4, 4);
@@ -240,7 +241,7 @@ fn void! decode_trees(TinfData *d, TinfTree *lt, TinfTree *dt)
 	// even though distance codes 30 and 31 have no meaning.
 	if (hlit > 286 || hdist > 30) return TinfError.DATA_ERROR?;
 
-	lengths[..] = 0;
+	lengths[:19] = 0;
 
 	// read code length for code length alphabet 
 	for (i = 0; i < hclen; i++)
@@ -268,6 +269,7 @@ fn void! decode_trees(TinfData *d, TinfTree *lt, TinfTree *dt)
 				// copy previous code length 3-6 times (read 2 bits)
 				if (num == 0) return TinfError.DATA_ERROR?;
 				sym = lengths[num - 1];
+				length = getbits_base(d, 2, 3);
 			case 17:
 				// repeat code length 0 for 3-10 times (read 3 bits)
 				sym = 0;
@@ -335,7 +337,7 @@ fn void! inflate_block_data(TinfData *d, TinfTree *lt, TinfTree *dt)
 		if (sym < 256)
 		{
 			if (d.dest == d.dest_end) return TinfError.BUF_ERROR?;
-			*d.dest++ = (char)sym;
+			*(d.dest++) = (char)sym;
 		}
 		else
 		{
@@ -365,11 +367,11 @@ fn void! inflate_block_data(TinfData *d, TinfTree *lt, TinfTree *dt)
 			// possibly get more bits from distance code
 			offs = getbits_base(d, dist_bits[dist], dist_base[dist]);
 
-			if (offs > d.dest - d.dest_start) {
+			if (offs > (d.dest - d.dest_start)) {
 				return TinfError.DATA_ERROR?;
 			}
 
-			if (d.dest_end - d.dest < length) {
+			if ((d.dest_end - d.dest) < length) {
 				return TinfError.BUF_ERROR?;
 			}
 
