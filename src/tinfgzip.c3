@@ -47,10 +47,8 @@ fn uint read_le_32(char *p) @inline
 {
 	return ((uint) p[0]) | ((uint) p[1] << 8) | ((uint) p[2] << 16) | ((uint) p[3] << 24); }
 
-fn void! gzip_uncompress(void *dest, int *destLen, void *source, uint sourceLen)
+fn void! gzip_uncompress(char[] dst, char[] src)
 {
-	char *src = (char *) source;
-	char *dst = (char *) dest;
 	char *start;
 	uint crc32;
 	int dlen;
@@ -59,7 +57,7 @@ fn void! gzip_uncompress(void *dest, int *destLen, void *source, uint sourceLen)
 	// -- Check header --
 
 	// Check room for at least 10 byte header and 8 byte trailer
-	if (sourceLen < 18) return TinfError.DATA_ERROR?;
+	if (src.len < 18) return TinfError.DATA_ERROR?;
 
 	// Check id bytes
 	if (src[0] != 0x1F || src[1] != 0x8B) return TinfError.DATA_ERROR?;
@@ -78,13 +76,13 @@ fn void! gzip_uncompress(void *dest, int *destLen, void *source, uint sourceLen)
 	// -- Find start of compressed data --
 
 	// Skip base header of 10 bytes
-	start = src + 10;
+	start = &src[10];
 
 	// Skip extra data if present
 	if (flg & FEXTRA) {
 		uint xlen = read_le_16(start);
 
-		if (xlen > sourceLen - 12) {
+		if (xlen > src.len - 12) {
 			return TinfError.DATA_ERROR?;
 		}
 
@@ -94,7 +92,7 @@ fn void! gzip_uncompress(void *dest, int *destLen, void *source, uint sourceLen)
 	// Skip file name if present
 	if (flg & FNAME) {
 		do {
-			if (start - src >= sourceLen) {
+			if (start - src.ptr >= src.len) {
 				return TinfError.DATA_ERROR?;
 			}
 		} while (*start++);
@@ -103,7 +101,7 @@ fn void! gzip_uncompress(void *dest, int *destLen, void *source, uint sourceLen)
 	// Skip file comment if present
 	if (flg & FCOMMENT) {
 		do {
-			if (start - src >= sourceLen) {
+			if (start - src.ptr >= src.len) {
 				return TinfError.DATA_ERROR?;
 			}
 		} while (*start++);
@@ -113,13 +111,13 @@ fn void! gzip_uncompress(void *dest, int *destLen, void *source, uint sourceLen)
 	if (flg & FHCRC) {
 		uint hcrc;
 
-		if (start - src > (long)sourceLen - 2) {
+		if (start - src.ptr > (long)src.len - 2) {
 			return TinfError.DATA_ERROR?;
 		}
 
 		hcrc = read_le_16(start);
 
-		if (hcrc != (crc32::encode((String)src[:(start - src)]) & 0x0000FFFF)) {
+		if (hcrc != (crc32::encode(src[:(start - src.ptr)]) & 0x0000FFFF)) {
 			return TinfError.DATA_ERROR?;
 		}
 
@@ -128,31 +126,31 @@ fn void! gzip_uncompress(void *dest, int *destLen, void *source, uint sourceLen)
 
 	// -- Get decompressed length --
 
-	dlen = read_le_32(&src[sourceLen - 4]);
+	dlen = read_le_32(&src[src.len - 4]);
 
-	if (dlen > *destLen) {
+	if (dlen > dst.len) {
 		return TinfError.BUF_ERROR?;
 	}
 
 	// -- Get CRC32 checksum of original data --
 
-	crc32 = read_le_32(&src[sourceLen - 8]);
+	crc32 = read_le_32(&src[src.len - 8]);
 
 	// -- Decompress data --
 
-	if ((src + sourceLen) - start < 8) {
+	if ((src.ptr + src.len) - start < 8) {
 		return TinfError.DATA_ERROR?;
 	}
 
-	tinf::uncompress(dst, destLen, start, (uint)((src + sourceLen) - start - 8))!;
+	tinf::uncompress(dst, start[:(uint)((src.ptr + src.len) - start - 8)])!;
 
-	if (*destLen != dlen) {
+	if (dst.len != dlen) {
 		return TinfError.DATA_ERROR?;
 	}
 
 	// -- Check CRC32 checksum --
 
-	if (crc32 != crc32::encode((String)dst[:dlen])) {
+	if (crc32 != crc32::encode(dst)) {
 		return TinfError.DATA_ERROR?;
 	}
 }

@@ -462,21 +462,21 @@ fn void! inflate_dynamic_block(TinfData *d)
 // -- public functions --
 
 // inflate stream from source to dest
-fn void! uncompress(void *dest, int *destLen, void *source, uint sourceLen)
+fn void! uncompress(char[] dest, char[] source)
 {
 	TinfData d;
 	int bfinal;
 
 	// unitialise data
-	d.source = (char *) source;
-	d.source_end = d.source + sourceLen;
+	d.source = source.ptr;
+	d.source_end = d.source + source.len;
 	d.tag = 0;
 	d.bitcount = 0;
 	d.overflow = 0;
 
-	d.dest = (char *) dest;
+	d.dest = dest.ptr;
 	d.dest_start = d.dest;
-	d.dest_end = d.dest + *destLen;
+	d.dest_end = d.dest + dest.len;
 
 	do {
 		uint btype;
@@ -509,7 +509,7 @@ fn void! uncompress(void *dest, int *destLen, void *source, uint sourceLen)
 		return TinfError.DATA_ERROR?;
 	}
 
-	*destLen = (int)(d.dest - d.dest_start);
+	dest = dest[:(usz)(d.dest - d.dest_start)];
 }
 
 

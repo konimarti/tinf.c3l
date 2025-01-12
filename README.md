@@ -8,13 +8,13 @@ API overview:
 import tinf;
 
 // inflate
-fn void! uncompress(void *dest, int *destLen, void *source, uint sourceLen)
+fn void! uncompress(char[] dst, char[] src)
 
 // gzip
-fn void! gzip_uncompress(void *dest, int *destLen, void *source, uint sourceLen)
+fn void! gzip_uncompress(char[] dst, char[] src)
 
 // zlib
-fn void! zlib_uncompress(void *dest, int *destLen, void *source, uint sourceLen)
+fn void! zlib_uncompress(char[] dst, char[] src)
 ```
 
 Run the unit tests with `c3c test` from the project root.

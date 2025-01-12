@@ -39,22 +39,19 @@ fn uint read_be_uint(char *p) @inline
 	return (uint)p[0] << 24 | (uint)p[1] << 16 | (uint)p[2] << 8 | (uint)p[3];
 }
 
-fn void! zlib_uncompress(void *dest, int *destLen, void *source, uint sourceLen)
+fn void! zlib_uncompress(char[] dest, char[] source) //void *dest, int *dest.len, void *source, uint source.len)
 {
-	char *src = (char*)source;
-	char *dst = (char*)dest;
-
 	uint a32;
 	char cmf, flg;
 
 	// -- check header --
 
 	// check room for at least 2 yte header and 4 byte trailer
-	if (sourceLen < 6) return TinfError.DATA_ERROR?;
+	if (source.len < 6) return TinfError.DATA_ERROR?;
 
 	// get header bytes
-	cmf = src[0];
-	flg = src[1];
+	cmf = source[0];
+	flg = source[1];
 
 	// check checksum
 	if ((256 * cmf + flg) % 31) return TinfError.DATA_ERROR?;
@@ -70,15 +67,15 @@ fn void! zlib_uncompress(void *dest, int *destLen, void *source, uint sourceLen)
 
 	// get Adler-32 checksum of original data
 
-	a32 = read_be_uint(&src[sourceLen - 4]);
+	a32 = read_be_uint(&source[source.len-4]);
 
 	// decompress data
 
-	uncompress(dst, destLen, src + 2, sourceLen - 6)!;
+	uncompress(dest, source[2:source.len-6])!;
 
 	// -- Check Adler-32 checksum --
 
-	if (a32 != adler32::encode((String)dst[:*destLen])) {
+	if (a32 != adler32::encode(dest)) {
 		return TinfError.DATA_ERROR?;
 	}
 }
