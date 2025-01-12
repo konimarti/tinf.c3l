@@ -1,5 +1,5 @@
 <*
- Ported to C3 from Koni Marti <koni.marti@gmail.com>
+ Ported to C3 by Koni Marti <koni.marti@gmail.com>
 
 /*
  * tinfzlib - tiny zlib decompressor
