@@ -28,7 +28,10 @@
  */
 
 *>
-module tinf;
+module tinf::gzip;
+
+import tinf::error;
+import tinf::inflate;
 
 import std::hash::crc32;
 
@@ -47,7 +50,7 @@ fn uint read_le_32(char *p) @inline
 {
 	return ((uint) p[0]) | ((uint) p[1] << 8) | ((uint) p[2] << 16) | ((uint) p[3] << 24); }
 
-fn void! gzip_uncompress(char[] dst, char[] src)
+fn void! uncompress(char[] dst, char[] src)
 {
 	char *start;
 	uint crc32;
@@ -142,7 +145,7 @@ fn void! gzip_uncompress(char[] dst, char[] src)
 		return TinfError.DATA_ERROR?;
 	}
 
-	tinf::uncompress(dst, start[:(uint)((src.ptr + src.len) - start - 8)])!;
+	inflate::uncompress(dst, start[:(uint)((src.ptr + src.len) - start - 8)])!;
 
 	if (dst.len != dlen) {
 		return TinfError.DATA_ERROR?;

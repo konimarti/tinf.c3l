@@ -5,16 +5,17 @@ format (called 'inflate'). Ported from [tinf](https://github.com/jibsen/tinf).
 
 API overview:
 ```cpp
-import tinf;
-
 // inflate
+import tinf::inflate;
 fn void! uncompress(char[] dst, char[] src)
 
 // gzip
-fn void! gzip_uncompress(char[] dst, char[] src)
+import tinf::gzip;
+fn void! uncompress(char[] dst, char[] src)
 
 // zlib
-fn void! zlib_uncompress(char[] dst, char[] src)
+import tinf::zlib;
+fn void! uncompress(char[] dst, char[] src)
 ```
 
 Run the unit tests with `c3c test` from the project root.

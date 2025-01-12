@@ -27,19 +27,19 @@
  */
 
 *>
-module tinf;
+module tinf::zlib;
 
+import tinf::inflate;
 import tinf::error;
 
 import std::hash::adler32;
-import std::io;
 
 fn uint read_be_uint(char *p) @inline
 {
 	return (uint)p[0] << 24 | (uint)p[1] << 16 | (uint)p[2] << 8 | (uint)p[3];
 }
 
-fn void! zlib_uncompress(char[] dest, char[] source) //void *dest, int *dest.len, void *source, uint source.len)
+fn void! uncompress(char[] dest, char[] source) //void *dest, int *dest.len, void *source, uint source.len)
 {
 	uint a32;
 	char cmf, flg;
@@ -71,7 +71,7 @@ fn void! zlib_uncompress(char[] dest, char[] source) //void *dest, int *dest.len
 
 	// decompress data
 
-	uncompress(dest, source[2:source.len-6])!;
+	inflate::uncompress(dest, source[2:source.len-6])!;
 
 	// -- Check Adler-32 checksum --
 

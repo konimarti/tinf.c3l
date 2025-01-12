@@ -43,7 +43,7 @@ fn void inflate_huffman_only()
 
 	out[..] = 0xFF;
 
-	tinf::uncompress(out[..], data[..])!!;
+	inflate::uncompress(out[..], data[..])!!;
 
 	assert(dlen == out.len);
 	foreach(c: out) assert(c == 0);
@@ -61,7 +61,7 @@ fn void inflate_rle()
 
 	out[..] = 0xFF;
 
-	tinf::uncompress(out[..], data[..])!!;
+	inflate::uncompress(out[..], data[..])!!;
 
 	assert(dlen == out.len);
 	foreach(c: out) assert(c == 0);
@@ -79,7 +79,7 @@ fn void inflate_max_matchlen()
 
 	out[..] = 0xFF;
 
-	tinf::uncompress(out[..], data[..])!!;
+	inflate::uncompress(out[..], data[..])!!;
 
 	assert(dlen == out.len);
 	foreach(c: out) assert(c == 0);
@@ -96,7 +96,7 @@ fn void inflate_max_matchlen_alt()
 
 	out[..] = 0xFF;
 
-	tinf::uncompress(out[..], data[..])!!;
+	inflate::uncompress(out[..], data[..])!!;
 
 	assert(dlen == out.len);
 	foreach(c: out) assert(c == 0);
@@ -117,7 +117,7 @@ fn void inflate_max_matchdist()
 
 	out[..] = 0xFF;
 
-	tinf::uncompress(out[..], data[..])!!;
+	inflate::uncompress(out[..], data[..])!!;
 
 	assert(dlen == out.len);
 	assert(out[0] == 2 && out[1] == 1 && out[2] == 0);
@@ -136,7 +136,7 @@ fn void inflate_code_length_codes()
 
 	out[..] = 0xFF;
 
-	tinf::uncompress(out[..], data[..])!!;
+	inflate::uncompress(out[..], data[..])!!;
 
 	assert(dlen == out.len);
 	foreach(c: out) assert(c == 0);
@@ -155,7 +155,7 @@ fn void inflate_max_codelen()
 
 	out[..] = 0xFF;
 
-	tinf::uncompress(out[..], data[..])!!;
+	inflate::uncompress(out[..], data[..])!!;
 
 	assert(dlen == out.len);
 	foreach(i, c: out) assert(c == i);
@@ -173,7 +173,7 @@ fn void zlib_one_byte_raw()
 
 	out[..] = 0xFF;
 
-	tinf::zlib_uncompress(out[..], data[..])!!;
+	zlib::uncompress(out[..], data[..])!!;
 
 	assert(dlen == out.len && out[0] == 0);
 }
@@ -189,7 +189,7 @@ fn void zlib_one_byte_fixed()
 
 	out[..] = 0xFF;
 
-	tinf::zlib_uncompress(out[..], data[..])!!;
+	zlib::uncompress(out[..], data[..])!!;
 
 	assert(dlen == out.len && out[0] == 0);
 }
@@ -206,7 +206,7 @@ fn void zlib_zeroes()
 
 	out[..] = 0xFF;
 
-	tinf::zlib_uncompress(out[..], data[..])!!;
+	zlib::uncompress(out[..], data[..])!!;
 
 	assert(dlen == out.len);
 	foreach (c: out) assert(c == 0);
@@ -221,7 +221,7 @@ fn void gzip_empty_fixed()
 	};
 	char[] out;
 
-	tinf::gzip_uncompress(out[..], data[..])!!;
+	gzip::uncompress(out[..], data[..])!!;
 
 	assert(out.len == 0);
 }
@@ -235,7 +235,7 @@ fn void gzip_empty_dynamic()
 	};
 	char[] out;
 
-	tinf::gzip_uncompress(out[..], data[..])!!;
+	gzip::uncompress(out[..], data[..])!!;
 
 	assert(out.len == 0);
 }
@@ -252,7 +252,7 @@ fn void gzip_one_byte_raw()
 
 	out[..] = 0xFF;
 
-	tinf::gzip_uncompress(out[..], data[..])!!;
+	gzip::uncompress(out[..], data[..])!!;
 
 	assert(dlen == out.len && out[0] == 0);
 }
@@ -269,7 +269,7 @@ fn void gzip_one_byte_fixed()
 
 	out[..] = 0xFF;
 
-	tinf::gzip_uncompress(out[..], data[..])!!;
+	gzip::uncompress(out[..], data[..])!!;
 
 	assert(dlen == out.len && out[0] == 0);
 }
@@ -287,7 +287,7 @@ fn void gzip_one_byte_dynamic()
 
 	out[..] = 0xFF;
 
-	tinf::gzip_uncompress(out[..], data[..])!!;
+	gzip::uncompress(out[..], data[..])!!;
 
 	assert(dlen == out.len && out[0] == 0);
 }
@@ -304,7 +304,7 @@ fn void gzip_fhcrc()
 
 	out[..] = 0xFF;
 
-	tinf::gzip_uncompress(out[..], data[..])!!;
+	gzip::uncompress(out[..], data[..])!!;
 
 	assert(dlen == 1 && out[0] == 0);
 }
@@ -321,7 +321,7 @@ fn void gzip_fextra()
 
 	out[..] = 0xFF;
 
-	tinf::gzip_uncompress(out[..], data[..])!!;
+	gzip::uncompress(out[..], data[..])!!;
 
 	assert(dlen == 1 && out[0] == 0);
 }
@@ -338,7 +338,7 @@ fn void gzip_fname()
 
 	out[..] = 0xFF;
 
-	tinf::gzip_uncompress(out[..], data[..])!!;
+	gzip::uncompress(out[..], data[..])!!;
 
 	assert(dlen == out.len && out[0] == 0);
 }
@@ -355,7 +355,7 @@ fn void gzip_fcomment()
 
 	out[..] = 0xFF;
 
-	tinf::gzip_uncompress(out[..], data[..])!!;
+	gzip::uncompress(out[..], data[..])!!;
 
 	assert(dlen == out.len && out[0] == 0);
 }

@@ -27,7 +27,7 @@
  */
 
 *>
-module tinf;
+module tinf::inflate;
 
 import tinf::error;
 import std::io;
@@ -458,8 +458,6 @@ fn void! inflate_dynamic_block(TinfData *d)
 	// decode block using decoded trees
 	return inflate_block_data(d, &d.ltree, &d.dtree);
 }
-
-// -- public functions --
 
 // inflate stream from source to dest
 fn void! uncompress(char[] dest, char[] source)
