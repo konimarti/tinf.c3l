@@ -39,7 +39,7 @@ fn uint read_be_uint(char *p) @inline
 	return (uint)p[0] << 24 | (uint)p[1] << 16 | (uint)p[2] << 8 | (uint)p[3];
 }
 
-fn void! uncompress(char[] dest, char[] source) //void *dest, int *dest.len, void *source, uint source.len)
+fn void? uncompress(char[] dest, char[] source) //void *dest, int *dest.len, void *source, uint source.len)
 {
 	uint a32;
 	char cmf, flg;
@@ -47,23 +47,23 @@ fn void! uncompress(char[] dest, char[] source) //void *dest, int *dest.len, voi
 	// -- check header --
 
 	// check room for at least 2 yte header and 4 byte trailer
-	if (source.len < 6) return TinfError.DATA_ERROR?;
+	if (source.len < 6) return error::DATA_ERROR?;
 
 	// get header bytes
 	cmf = source[0];
 	flg = source[1];
 
 	// check checksum
-	if ((256 * cmf + flg) % 31) return TinfError.DATA_ERROR?;
+	if ((256 * cmf + flg) % 31) return error::DATA_ERROR?;
 
 	// check method is deflate
-	if ((cmf & 0x0F) != 8) return TinfError.DATA_ERROR?;
+	if ((cmf & 0x0F) != 8) return error::DATA_ERROR?;
 
 	// check window size is valid
-	if ((cmf >> 4) > 7) return TinfError.DATA_ERROR?;
+	if ((cmf >> 4) > 7) return error::DATA_ERROR?;
 
 	// Check there is no preset dictionary
-	if (flg & 0x20) return TinfError.DATA_ERROR?;
+	if (flg & 0x20) return error::DATA_ERROR?;
 
 	// get Adler-32 checksum of original data
 
@@ -75,7 +75,7 @@ fn void! uncompress(char[] dest, char[] source) //void *dest, int *dest.len, voi
 
 	// -- Check Adler-32 checksum --
 
-	if (a32 != adler32::encode(dest)) {
-		return TinfError.DATA_ERROR?;
+	if (a32 != adler32::hash(dest)) {
+		return error::DATA_ERROR?;
 	}
 }

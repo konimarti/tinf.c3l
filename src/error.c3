@@ -1,7 +1,3 @@
 module tinf::error;
 
-fault TinfError 
-{
-	DATA_ERROR,
-	BUF_ERROR
-}
+faultdef DATA_ERROR, BUF_ERROR;

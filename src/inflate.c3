@@ -58,7 +58,7 @@ struct TinfData
 <*
 require @is_instream(stream)
 *>
-macro ushort! read_le_ushort(stream)
+macro ushort? read_le_ushort(stream)
 {
 	char lo_byte = stream.read_byte()!; // p[0]
 	char hi_byte = stream.read_byte()!; // p[1]
@@ -106,7 +106,7 @@ fn void build_fixed_trees(TinfTree *lt, TinfTree *dt)
 	dt.max_sym = 29;
 }
 
-fn void! build_tree(TinfTree *t, char[] lengths, uint num)
+fn void? build_tree(TinfTree *t, char[] lengths, uint num)
 {
 	ushort[16] offs;
 	uint i, num_codes, available;
@@ -128,7 +128,7 @@ fn void! build_tree(TinfTree *t, char[] lengths, uint num)
 		}
 	}
 
-	// compute offset table for distribution sort 
+	// compute offset table for distribution sort
 	available = 1;
 	num_codes = 0;
 	for (i = 0; i < 16; i++)
@@ -136,7 +136,7 @@ fn void! build_tree(TinfTree *t, char[] lengths, uint num)
 		uint used = t.counts[i];
 
 		// check lengh contains no more codes than available
-		if (used > available) return TinfError.DATA_ERROR?;
+		if (used > available) return error::DATA_ERROR?;
 		available = 2 * (available - used);
 
 		offs[i] = (ushort)num_codes;
@@ -147,7 +147,7 @@ fn void! build_tree(TinfTree *t, char[] lengths, uint num)
 	// that it has length 1
 	if ((num_codes > 1 && available > 0) || (num_codes == 1 && t.counts[1] != 1))
 	{
-		return TinfError.DATA_ERROR?;
+		return error::DATA_ERROR?;
 	}
 
 	// fill in symbols sorted by code
@@ -241,7 +241,7 @@ fn int decode_symbol(TinfData *d, TinfTree *t)
 }
 
 // given a data stream, decode dynamic trees from it
-fn void! decode_trees(TinfData *d, TinfTree *lt, TinfTree *dt)
+fn void? decode_trees(TinfData *d, TinfTree *lt, TinfTree *dt)
 {
 	char[288 + 32] lengths;
 
@@ -265,11 +265,11 @@ fn void! decode_trees(TinfData *d, TinfTree *lt, TinfTree *dt)
 
 	// rfc limits the range of HLIT to 286, but lists HDIST as range 1-32,
 	// even though distance codes 30 and 31 have no meaning.
-	if (hlit > 286 || hdist > 30) return TinfError.DATA_ERROR?;
+	if (hlit > 286 || hdist > 30) return error::DATA_ERROR?;
 
 	lengths[:19] = 0;
 
-	// read code length for code length alphabet 
+	// read code length for code length alphabet
 	for (i = 0; i < hclen; i++)
 	{
 		// get 3 bits code length (0-7)
@@ -281,19 +281,19 @@ fn void! decode_trees(TinfData *d, TinfTree *lt, TinfTree *dt)
 	build_tree(lt, lengths[..], 19)!;
 
 	// check code length tree is not empty
-	if (lt.max_sym == -1) return TinfError.DATA_ERROR?;
+	if (lt.max_sym == -1) return error::DATA_ERROR?;
 
 	// decode code lengths for the dynamic trees
 	for (num = 0; num < hlit + hdist;)
 	{
 		int sym = decode_symbol(d, lt);
-		if (sym > lt.max_sym) return TinfError.DATA_ERROR?;
+		if (sym > lt.max_sym) return error::DATA_ERROR?;
 
 		switch (sym)
 		{
 			case 16:
 				// copy previous code length 3-6 times (read 2 bits)
-				if (num == 0) return TinfError.DATA_ERROR?;
+				if (num == 0) return error::DATA_ERROR?;
 				sym = lengths[num - 1];
 				length = getbits_base(d, 2, 3);
 			case 17:
@@ -309,13 +309,13 @@ fn void! decode_trees(TinfData *d, TinfTree *lt, TinfTree *dt)
 				length = 1;
 		}
 
-		if (length > hlit + hdist - num) return TinfError.DATA_ERROR?;
+		if (length > hlit + hdist - num) return error::DATA_ERROR?;
 
 		while (length--) lengths[num++] = (char)sym;
 	}
 
 	// check EOB symbol is present
-	if (lengths[256] == 0) return TinfError.DATA_ERROR?;
+	if (lengths[256] == 0) return error::DATA_ERROR?;
 
 	// build dynamic trees
 	build_tree(lt, lengths[..], hlit)!;
@@ -325,9 +325,9 @@ fn void! decode_trees(TinfData *d, TinfTree *lt, TinfTree *dt)
 // -- block inflate functions --
 
 // given a stream and two trees, inflate a block of data
-fn void! inflate_block_data(TinfData *d, TinfTree *lt, TinfTree *dt)
+fn void? inflate_block_data(TinfData *d, TinfTree *lt, TinfTree *dt)
 {
-	// extra bits and base tables for length codes 
+	// extra bits and base tables for length codes
 	char[30] length_bits = {
 		0, 0, 0, 0, 0, 0, 0, 0, 1, 1,
 		1, 1, 2, 2, 2, 2, 3, 3, 3, 3,
@@ -353,16 +353,16 @@ fn void! inflate_block_data(TinfData *d, TinfTree *lt, TinfTree *dt)
 		1025, 1537, 2049, 3073, 4097, 6145, 8193, 12289, 16385, 24577
 	};
 
-	while LOOP: (true)	
+	while LOOP: (true)
 	{
 		int sym = decode_symbol(d, lt);
 
 		// check for overflow in bit reader
-		if (d.overflow) return TinfError.DATA_ERROR?;
+		if (d.overflow) return error::DATA_ERROR?;
 
 		if (sym < 256)
 		{
-			if (d.dest == d.dest_end) return TinfError.BUF_ERROR?;
+			if (d.dest == d.dest_end) return error::BUF_ERROR?;
 			*(d.dest++) = (char)sym;
 		}
 		else
@@ -370,12 +370,12 @@ fn void! inflate_block_data(TinfData *d, TinfTree *lt, TinfTree *dt)
 			int length, dist, offs;
 			int i;
 
-			// check for end of block 
+			// check for end of block
 			if (sym == 256) break LOOP;
 
 			// Check sym is within range and distance tree is not empty
 			if (sym > lt.max_sym || sym - 257 > 28 || dt.max_sym == -1) {
-				return TinfError.DATA_ERROR?;
+				return error::DATA_ERROR?;
 			}
 
 			sym -= 257;
@@ -387,18 +387,18 @@ fn void! inflate_block_data(TinfData *d, TinfTree *lt, TinfTree *dt)
 
 			// check dist is within range
 			if (dist > dt.max_sym || dist > 29) {
-				return TinfError.DATA_ERROR?;
+				return error::DATA_ERROR?;
 			}
 
 			// possibly get more bits from distance code
 			offs = getbits_base(d, dist_bits[dist], dist_base[dist]);
 
 			if (offs > (d.dest - d.dest_start)) {
-				return TinfError.DATA_ERROR?;
+				return error::DATA_ERROR?;
 			}
 
 			if ((d.dest_end - d.dest) < length) {
-				return TinfError.BUF_ERROR?;
+				return error::BUF_ERROR?;
 			}
 
 			// copy match
@@ -412,23 +412,23 @@ fn void! inflate_block_data(TinfData *d, TinfTree *lt, TinfTree *dt)
 }
 
 // inflate an uncompressed block of data
-fn void! inflate_uncompressed_block(TinfData *d)
+fn void? inflate_uncompressed_block(TinfData *d)
 {
 	uint length, invlength;
 
-	if (d.source_end - d.source < 4) return TinfError.DATA_ERROR?;
+	if (d.source_end - d.source < 4) return error::DATA_ERROR?;
 
 	length = read_le_ushort(io::wrap_bytes(d.source[:2]))!;
 
 	invlength = read_le_ushort(io::wrap_bytes(d.source[2:2]))!;
 
-	if (length != (~invlength & 0x0000FFFF)) return TinfError.DATA_ERROR?;
+	if (length != (~invlength & 0x0000FFFF)) return error::DATA_ERROR?;
 
 	d.source += 4;
 
-	if (d.source_end - d.source < length) return TinfError.DATA_ERROR?;
+	if (d.source_end - d.source < length) return error::DATA_ERROR?;
 
-	if (d.dest_end - d.dest < length)  return TinfError.BUF_ERROR?;
+	if (d.dest_end - d.dest < length)  return error::BUF_ERROR?;
 
 	// copy block
 	while (length--) {
@@ -441,16 +441,16 @@ fn void! inflate_uncompressed_block(TinfData *d)
 }
 
 // inflate a block of data compressed with fixed Huffman trees
-fn void! inflate_fixed_block(TinfData *d)
+fn void? inflate_fixed_block(TinfData *d)
 {
 	// build fixed Huffman trees
 	build_fixed_trees(&d.ltree, &d.dtree);
-	
+
 	// decode block using fixed trees
 	return inflate_block_data(d, &d.ltree, &d.dtree);
 }
 
-fn void! inflate_dynamic_block(TinfData *d)
+fn void? inflate_dynamic_block(TinfData *d)
 {
 	// decode trees from stream
 	decode_trees(d, &d.ltree, &d.dtree)!;
@@ -460,7 +460,7 @@ fn void! inflate_dynamic_block(TinfData *d)
 }
 
 // inflate stream from source to dest
-fn void! uncompress(char[] dest, char[] source)
+fn void? uncompress(char[] dest, char[] source)
 {
 	TinfData d;
 	int bfinal;
@@ -497,14 +497,14 @@ fn void! uncompress(char[] dest, char[] source)
 			// decompress block with dynamic Huffman trees
 			inflate_dynamic_block(&d)!;
 		default:
-			return TinfError.DATA_ERROR?;	
+			return error::DATA_ERROR?;
 		}
 
 	} while (!bfinal);
 
 	// Check for overflow in bit reader
 	if (d.overflow) {
-		return TinfError.DATA_ERROR?;
+		return error::DATA_ERROR?;
 	}
 
 	dest = dest[:(usz)(d.dest - d.dest_start)];
