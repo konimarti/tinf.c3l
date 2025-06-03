@@ -7,15 +7,15 @@ API overview:
 ```cpp
 // inflate
 import tinf::inflate;
-fn void! uncompress(char[] dst, char[] src)
+fn void? uncompress(char[] dst, char[] src)
 
 // gzip
 import tinf::gzip;
-fn void! uncompress(char[] dst, char[] src)
+fn void? uncompress(char[] dst, char[] src)
 
 // zlib
 import tinf::zlib;
-fn void! uncompress(char[] dst, char[] src)
+fn void? uncompress(char[] dst, char[] src)
 ```
 
 Run the unit tests with `c3c test` from the project root.
