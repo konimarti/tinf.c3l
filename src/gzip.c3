@@ -48,7 +48,8 @@ fn uint read_le_16(char *p) @inline
 
 fn uint read_le_32(char *p) @inline
 {
-	return ((uint) p[0]) | ((uint) p[1] << 8) | ((uint) p[2] << 16) | ((uint) p[3] << 24); }
+	return ((uint) p[0]) | ((uint) p[1] << 8) | ((uint) p[2] << 16) | ((uint) p[3] << 24);
+}
 
 fn void? uncompress(char[] dst, char[] src)
 {
@@ -60,19 +61,29 @@ fn void? uncompress(char[] dst, char[] src)
 	// -- Check header --
 
 	// Check room for at least 10 byte header and 8 byte trailer
-	if (src.len < 18) return error::DATA_ERROR?;
+	if (src.len < 18)
+	{
+		return error::DATA_ERROR?;
+	}
 
 	// Check id bytes
-	if (src[0] != 0x1F || src[1] != 0x8B) return error::DATA_ERROR?;
+	if (src[0] != 0x1F || src[1] != 0x8B)
+	{
+		return error::DATA_ERROR?;
+	}
 
 	// Check method is deflate
-	if (src[2] != 8) return error::DATA_ERROR?;
+	if (src[2] != 8)
+	{
+		return error::DATA_ERROR?;
+	}
 
 	// Get flag byte
 	flg = src[3];
 
 	// Check that reserved bits are zero
-	if (flg & 0xE0) {
+	if (flg & 0xE0)
+	{
 		return error::DATA_ERROR?;
 	}
 
@@ -82,45 +93,54 @@ fn void? uncompress(char[] dst, char[] src)
 	start = &src[10];
 
 	// Skip extra data if present
-	if (flg & FEXTRA) {
+	if (flg & FEXTRA)
+	{
 		uint xlen = read_le_16(start);
 
-		if (xlen > src.len - 12) {
+		if (xlen > src.len - 12)
+		{
 			return error::DATA_ERROR?;
 		}
 
-		start += xlen + 2;
+		start += (isz)xlen + 2;
 	}
 
 	// Skip file name if present
-	if (flg & FNAME) {
+	if (flg & FNAME)
+	{
 		do {
-			if (start - src.ptr >= src.len) {
+			if (start - src.ptr >= src.len)
+			{
 				return error::DATA_ERROR?;
 			}
 		} while (*start++);
 	}
 
 	// Skip file comment if present
-	if (flg & FCOMMENT) {
+	if (flg & FCOMMENT)
+	{
 		do {
-			if (start - src.ptr >= src.len) {
+			if (start - src.ptr >= src.len)
+			{
 				return error::DATA_ERROR?;
 			}
 		} while (*start++);
 	}
 
 	// Check header crc if present
-	if (flg & FHCRC) {
+	if (flg & FHCRC)
+	{
 		uint hcrc;
 
-		if (start - src.ptr > (long)src.len - 2) {
+		if (start - src.ptr > (long)src.len - 2)
+		{
 			return error::DATA_ERROR?;
 		}
 
 		hcrc = read_le_16(start);
 
-		if (hcrc != (crc32::hash(src[:(start - src.ptr)]) & 0x0000FFFF)) {
+		if (hcrc != (crc32::hash(src[:(start - src.ptr)]) & 0x0000FFFF))
+		{
 			return error::DATA_ERROR?;
 		}
 
@@ -131,7 +151,8 @@ fn void? uncompress(char[] dst, char[] src)
 
 	dlen = read_le_32(&src[src.len - 4]);
 
-	if (dlen > dst.len) {
+	if (dlen > dst.len)
+	{
 		return error::BUF_ERROR?;
 	}
 
@@ -141,19 +162,22 @@ fn void? uncompress(char[] dst, char[] src)
 
 	// -- Decompress data --
 
-	if ((src.ptr + src.len) - start < 8) {
+	if ((src.ptr + src.len) - start < 8)
+	{
 		return error::DATA_ERROR?;
 	}
 
 	inflate::uncompress(dst, start[:(uint)((src.ptr + src.len) - start - 8)])!;
 
-	if (dst.len != dlen) {
+	if (dst.len != dlen)
+	{
 		return error::DATA_ERROR?;
 	}
 
 	// -- Check CRC32 checksum --
 
-	if (crc32 != crc32::hash(dst)) {
+	if (crc32 != crc32::hash(dst))
+	{
 		return error::DATA_ERROR?;
 	}
 }

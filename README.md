@@ -20,10 +20,6 @@ fn void? uncompress(char[] dst, char[] src)
 
 Run the unit tests with `c3c test` from the project root.
 
-### Example
-
-Example will follow.
-
 ### Installation
 
 Clone the repository with

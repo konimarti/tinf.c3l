@@ -1,4 +1,5 @@
 <*
+
  Ported to C3 by Koni Marti <koni.marti@gmail.com>
 
 /*
@@ -136,7 +137,10 @@ fn void? build_tree(TinfTree *t, char[] lengths, uint num)
 		uint used = t.counts[i];
 
 		// check lengh contains no more codes than available
-		if (used > available) return error::DATA_ERROR?;
+		if (used > available)
+		{
+			return error::DATA_ERROR?;
+		}
 		available = 2 * (available - used);
 
 		offs[i] = (ushort)num_codes;
@@ -168,10 +172,11 @@ fn void? build_tree(TinfTree *t, char[] lengths, uint num)
 	}
 }
 
+<*
+ @require num >= 0 && num <= 32
+*>
 fn void refill(TinfData *d, int num)
 {
-	assert(num >= 0 && num <= 32);
-
 	// read bytes until at least num bits available
 	while (d.bitcount < num)
 	{
@@ -486,7 +491,8 @@ fn void? uncompress(char[] dest, char[] source)
 		btype = getbits(&d, 2);
 
 		// uecompress block
-		switch (btype) {
+		switch (btype)
+		{
 		case 0:
 			// decompress uncompressed block
 			inflate_uncompressed_block(&d)!;
@@ -503,7 +509,8 @@ fn void? uncompress(char[] dest, char[] source)
 	} while (!bfinal);
 
 	// Check for overflow in bit reader
-	if (d.overflow) {
+	if (d.overflow)
+	{
 		return error::DATA_ERROR?;
 	}
 

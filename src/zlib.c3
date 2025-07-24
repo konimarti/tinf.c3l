@@ -1,4 +1,5 @@
 <*
+
  Ported to C3 by Koni Marti <koni.marti@gmail.com>
 
 /*
@@ -39,14 +40,14 @@ fn uint read_be_uint(char *p) @inline
 	return (uint)p[0] << 24 | (uint)p[1] << 16 | (uint)p[2] << 8 | (uint)p[3];
 }
 
-fn void? uncompress(char[] dest, char[] source) //void *dest, int *dest.len, void *source, uint source.len)
+fn void? uncompress(char[] dest, char[] source)
 {
 	uint a32;
 	char cmf, flg;
 
 	// -- check header --
 
-	// check room for at least 2 yte header and 4 byte trailer
+	// check room for at least 2 byte header and 4 byte trailer
 	if (source.len < 6) return error::DATA_ERROR?;
 
 	// get header bytes
@@ -75,7 +76,5 @@ fn void? uncompress(char[] dest, char[] source) //void *dest, int *dest.len, voi
 
 	// -- Check Adler-32 checksum --
 
-	if (a32 != adler32::hash(dest)) {
-		return error::DATA_ERROR?;
-	}
+	if (a32 != adler32::hash(dest)) return error::DATA_ERROR?;
 }
