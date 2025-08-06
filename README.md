@@ -36,3 +36,16 @@ to the `./lib` folder of your C3 project and add the following to
 
 If you didn't clone it into the `lib` folder, adjust your
 `dependency-search-paths` accordingly.
+
+### Example: gunzip
+
+Build `gunzip`:
+```c3c build gunzip```
+
+Test it:
+```
+$ echo "hello" > zipped
+$ gzip zipped
+$ build/gunzip < zipped.gz
+hello
+```

@@ -2,10 +2,15 @@
 	"authors": [ "Koni Marti <koni.marti@gmail.com>" ],
 	"version": "0.1.0",
 	"output": "build",
-	"sources": [ "src/*", "test/*" ],
+	"sources": [ "src/*" ],
+	"test-sources": [ "test/*" ],
 	"targets": {
 		"test": {
 			"type": "executable"
+		},
+		"gunzip": {
+			"type": "executable",
+			"sources": [ "src/gunzip/*" ]
 		}
 	}
 }

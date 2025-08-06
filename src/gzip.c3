@@ -51,6 +51,15 @@ fn uint read_le_32(char *p) @inline
 	return ((uint) p[0]) | ((uint) p[1] << 8) | ((uint) p[2] << 16) | ((uint) p[3] << 24);
 }
 
+<*
+ Get the length of the uncompressed data which is encoded in the last four
+ bytes of the gzip-compressed input.
+
+ @param [in] src : "gzip-compressed data"
+ @require src.len >= 18 : "require at least 10 byte header and 8 byte trailer"
+*>
+fn usz uncompressed_len(char[] src) @inline => read_le_32(&src[src.len - 4]);
+
 fn void? uncompress(char[] dst, char[] src)
 {
 	char *start;
