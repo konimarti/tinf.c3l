@@ -1,5 +1,6 @@
 {
   "provides" : "tinf",
+  "sources": [ "src/*" ],
   "targets" : {
     "freebsd-x64" : {
       // Extra flags to the linker for this target:
