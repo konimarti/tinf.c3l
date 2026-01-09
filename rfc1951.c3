@@ -130,13 +130,21 @@ fn void fixed_huff() => @pool()
 	};
 
 	// Generate the fixed Huffman codes
-	uint[] codes = gen_huff(bit_len);
+	uint[] huff_codes = gen_huff(bit_len);
+
+	// Distance codes bit_len
+	int[*] bit_len = {
+		[  0..32] = 5,
+	};
+
+	// Generate the distance codes
+	uint[] dist_codes = gen_huff(bit_len);
 
 	// Input string to be deflated
 	char[] s = "hello world";
 
 	// Encode string
-	char[] encoded = huff_encode(s, codes, bit_len[..], tmem);
+	char[] encoded = huff_encode(s, huff_codes, bit_len[..], tmem);
 
 	verify(encoded, s, "fixed_huff");
 }
