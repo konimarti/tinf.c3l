@@ -1,37 +1,85 @@
 module rfc;
 import std::io, std::encoding, std::collections, tinf;
 
+struct BitSetter
+{
+	List{char} list;
+	usz pos;
+}
+
+fn void BitSetter.init(&self, Allocator allocator) => self.list.init(allocator);
+fn void BitSetter.tinit(&self) => self.init(tmem);
+fn void BitSetter.free(&self) => self.list.free();
+
+fn void BitSetter.push(&self, char bit)
+{
+	usz index = self.pos / 8;
+	usz offset = self.pos % 8;
+	if (index >= self.list.len()) self.list.push(0);
+
+	char b = self.list[index];
+	// reg |= (1 << pos); → set a bit.
+	// reg &= ~(1 << pos); → clear a bit.
+	b = (bit == 1) ? b | (1UL << offset) : b & ~(+1UL << offset);
+
+	self.list[index] = b;
+	self.pos++;
+}
+
 fn void main() => @pool()
 {
 	int[] codes = gen_huff();
 
 	char[] s = "hello world";
+	// char[] s = {0, 0, 0, 0, 0, 0, 0, 0};
 
-	GrowableBitSet{char} encoded;
-	encoded.tinit();
-	// BFINAL 1
-	// BTYPE  01
-	encoded.set(0);
-	encoded.set(2);
-	usz pos = 3;
+	// Encoding a byte
+	char eb = 0;
+	eb |= 0b101;
+	io::printfn("encoded byte: %08b", eb);
+	io::printfn("encoded byte: %x", eb);
+
+	BitSetter bs;
+	bs.tinit();
+
+	// BFINAL 1 + BTYPE  01 will read ..011 from right to left
+	bs.push(1);
+	bs.push(1);
+	bs.push(0);
 
 	foreach(c: s)
 	{
 		char code = (char)codes[c];
-		for (int i = 0; i < 8; i++)
+		io::printfn("code: %08b", code);
+		for (int i = 7; i >= 0; i--)
 		{
-			if ((code & (1<<i)) != 0) encoded.set(pos);
-			pos++;
+			bool bit_set = ((code & (1UL<<i)) != 0);
+			io::printfn("bit %d is %s", i, bit_set);
+			bs.push(bit_set ? 1 : 0);
 		}
 	}
 
-	encoded.set(pos+7);
-	encoded.unset(pos+7);
+	// Add end of block code 256
+	char code = (char)codes[256];
+	io::printfn("end-of-block code: %08b", code);
+	for (int i = 7; i >= 0; i--)
+	{
+		bool bit_set = ((code & (1UL<<i)) != 0);
+		io::printfn("bit %d is %s", i, bit_set);
+		bs.push(bit_set ? 1 : 0);
+	}
 
-	char[] input = encoded.data.array_view()[:13];
+	foreach (i, b : bs.list)
+	{
+		io::printfn("bytes %d: 0x%02x 0b%08b", i, b, b);
+	}
 
 	char[16] output;
-	inflate::uncompress(output[..], input)!!;
+	inflate::uncompress(output[..], bs.list.array_view())!!;
+
+	io::printfn("uncompressed: '%s'", (String)output[..]);
+
+	assert((String)s[:s.len] == (String)output[:s.len]);
 }
 
 <*
