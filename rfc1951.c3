@@ -61,8 +61,66 @@ fn void DynamicBitList.push(&self, uint b, usz num_bits, bool lsb = true)
 	}
 }
 
-fn void main() => @pool()
+fn void main()
 {
+	no_compression();
+	fixed_huff();
+}
+
+// macro void? write_le_16(stream, ushort s)
+// {
+// 	stream.write_byte((char)s)!;
+// 	stream.write_byte((char)(s >> 8))!;
+// }
+
+import std::math;
+fn void no_compression() => @pool()
+{
+	io::printn("-- no compression --");
+	// char[] input = "hello world";
+	char[1024] input;
+	foreach (i, &e : input) *e = (char)(i % 255);
+	char[] encoded = nocomp_encode(input[..], tmem);
+	verify(encoded, input[..], "no_comp");
+}
+
+fn char[] nocomp_encode(char[] input, Allocator allocator) => @pool()
+{
+	DynamicBitList bs;
+	bs.tinit();
+
+	// Set Block header
+	// Push BFINAL (0b1) and BTYPE (0b00) as 0x001 [read from right to left]
+	bs.push(0b001, 8);
+
+	// Encode len (deflate rfc packes data elements into bytes as lsb) If
+	// input.len does not fit an ushort, we have to create multiple blocks
+	ushort len = (ushort)input.len;
+	bs.push((char)len, 8, lsb: true);
+	bs.push((char)(len>>8), 8, lsb: true);
+
+	ushort nlen = ~len;
+	bs.push((char)nlen, 8, lsb: true);
+	bs.push((char)(nlen>>8), 8, lsb: true);
+
+	// Encode data
+	foreach(c: input)
+	{
+		bs.push(c, 8, lsb: true);
+	}
+
+	foreach (i, b : bs.list)
+	{
+		io::printfn("bytes %2d: 0x%02x 0b%08b", i, b, b);
+	}
+
+	return bs.list.to_array(allocator);
+}
+
+fn void fixed_huff() => @pool()
+{
+	io::printn("-- fixed huffman encoding --");
+
 	// Fixed Huffman codes bit_len
 	int[*] bit_len = {
 		[  0..143] = 8,
@@ -80,16 +138,21 @@ fn void main() => @pool()
 	// Encode string
 	char[] encoded = huff_encode(s, codes, bit_len[..], tmem);
 
+	verify(encoded, s, "fixed_huff");
+}
+
+fn void verify(char[] encoded, char[] input, String test_name)
+{
 	// Decompress with inflate
-	char[16] output;
+	char[1024] output;
 	inflate::uncompress(output[..], encoded)!!;
-	io::printfn("uncompressed: '%s'", (String)output[..]);
+	// io::printfn("uncompressed: '%s'", (String)output[..]);
 
-	String want = (String)s[:s.len];
-	String got = (String)output[:s.len];
-	assert(want == got, "want: %s, got: %s", want, got);
+	String want = (String)input[:input.len];
+	String got = (String)output[:input.len];
+	assert(want == got, "%s failed: want: %s, got: %s", test_name, want, got);
 
-	io::printn("SUCCESS");
+	io::printfn("SUCCESS: %s", test_name);
 }
 
 <*
@@ -145,7 +208,7 @@ fn uint[] gen_huff(int[288] bit_len)
         // 2)  Find the numerical value of the smallest code for each
         //     code length:
 
-	const MAX_BITS = 16; // ??
+	const MAX_BITS = 32; // ??
 
 	List{int} next_code;
 	next_code.tinit();
