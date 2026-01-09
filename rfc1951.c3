@@ -1,111 +1,146 @@
 module rfc;
 import std::io, std::encoding, std::collections, tinf;
 
-struct BitSetter
+struct DynamicBitList
 {
 	List{char} list;
 	usz pos;
 }
 
-fn void BitSetter.init(&self, Allocator allocator) => self.list.init(allocator);
-fn void BitSetter.tinit(&self) => self.init(tmem);
-fn void BitSetter.free(&self) => self.list.free();
+fn void DynamicBitList.init(&self, Allocator allocator) => self.list.init(allocator);
+fn void DynamicBitList.tinit(&self) => self.init(tmem);
+fn void DynamicBitList.free(&self) => self.list.free();
 
-fn void BitSetter.push(&self, char bit)
+enum BitState { UNSET, SET }
+fn void DynamicBitList.push_bit(&self, BitState bit)
 {
 	usz index = self.pos / 8;
 	usz offset = self.pos % 8;
 	if (index >= self.list.len()) self.list.push(0);
 
 	char b = self.list[index];
-	// reg |= (1 << pos); → set a bit.
-	// reg &= ~(1 << pos); → clear a bit.
-	b = (bit == 1) ? b | (1UL << offset) : b & ~(+1UL << offset);
+	b = (bit == SET) ? b | (1UL << offset) : b & ~(+1UL << offset);
 
 	self.list[index] = b;
 	self.pos++;
 }
 
-fn void main() => @pool()
+<*
+ @require pos >= 0 && pos <= 32 : "Pos needs to be between 0 and 32."
+*>
+macro BitState get_bit_state(uint b, isz pos)
 {
-	int[] codes = gen_huff();
-
-	char[] s = "hello world";
-	// char[] s = {0, 0, 0, 0, 0, 0, 0, 0};
-
-	// Encoding a byte
-	char eb = 0;
-	eb |= 0b101;
-	io::printfn("encoded byte: %08b", eb);
-	io::printfn("encoded byte: %x", eb);
-
-	BitSetter bs;
-	bs.tinit();
-
-	// BFINAL 1 + BTYPE  01 will read ..011 from right to left
-	bs.push(1);
-	bs.push(1);
-	bs.push(0);
-
-	foreach(c: s)
-	{
-		char code = (char)codes[c];
-		io::printfn("code: %08b", code);
-		for (int i = 7; i >= 0; i--)
-		{
-			bool bit_set = ((code & (1UL<<i)) != 0);
-			io::printfn("bit %d is %s", i, bit_set);
-			bs.push(bit_set ? 1 : 0);
-		}
-	}
-
-	// Add end of block code 256
-	char code = (char)codes[256];
-	io::printfn("end-of-block code: %08b", code);
-	for (int i = 7; i >= 0; i--)
-	{
-		bool bit_set = ((code & (1UL<<i)) != 0);
-		io::printfn("bit %d is %s", i, bit_set);
-		bs.push(bit_set ? 1 : 0);
-	}
-
-	foreach (i, b : bs.list)
-	{
-		io::printfn("bytes %d: 0x%02x 0b%08b", i, b, b);
-	}
-
-	char[16] output;
-	inflate::uncompress(output[..], bs.list.array_view())!!;
-
-	io::printfn("uncompressed: '%s'", (String)output[..]);
-
-	assert((String)s[:s.len] == (String)output[:s.len]);
+	return (b & (1UL<<pos)) != 0 ? BitState.SET : BitState.UNSET;
 }
 
 <*
- RFC 1951, Section 3.2.2. Use of Huffman coding in the "deflate" format
+ @param b        : "Bits to be pushed"
+ @param num_bits : "Number of bits to push"
+ @param lsb      : "Order from which side to start pushing bits"
+ @require num_bits > 0   : "Number of bits must be at least 1"
+ @require num_bits <= 32 : "Number of bits can not be larger than 32"
 *>
-fn int[] gen_huff()
+fn void DynamicBitList.push(&self, uint b, usz num_bits, bool lsb = true)
 {
-	// Toy model in RFC:
-	// int[*] lens = { 3, 3, 3, 3, 3, 2, 4, 4 };
-	// char[*] sym = "ABCDEFGH";
+	isz start, end;
+	start = 0;
+	end   = num_bits - 1;
+	if (lsb)
+	{
+		for (isz i = start; i <= end; i+= lsb ? 1 : -1)
+		{
+			self.push_bit(get_bit_state(b, i));
+		}
+	}
+	else
+	{
+		for (isz i = end; i >= start; i--)
+		{
+			self.push_bit(get_bit_state(b, i));
+		}
+	}
+}
 
-	// Fixed Huffman codes (BTYPE=01)
-	int[*] lens = {
+fn void main() => @pool()
+{
+	// Fixed Huffman codes bit_len
+	int[*] bit_len = {
 		[  0..143] = 8,
 		[144..255] = 9,
 		[256..279] = 7,
 		[280..287] = 8,
 	};
 
+	// Generate the fixed Huffman codes
+	uint[] codes = gen_huff(bit_len);
+
+	// Input string to be deflated
+	char[] s = "hello world";
+
+	// Encode string
+	char[] encoded = huff_encode(s, codes, bit_len[..], tmem);
+
+	// Decompress with inflate
+	char[16] output;
+	inflate::uncompress(output[..], encoded)!!;
+	io::printfn("uncompressed: '%s'", (String)output[..]);
+
+	String want = (String)s[:s.len];
+	String got = (String)output[:s.len];
+	assert(want == got, "want: %s, got: %s", want, got);
+
+	io::printn("SUCCESS");
+}
+
+<*
+ Encode char[] with the provided Huffman codes and bit lengths.
+ @require codes.len == len.len
+*>
+fn char[] huff_encode(char[] input, uint[] codes, int[] len, Allocator allocator) => @pool()
+{
+	DynamicBitList bs;
+	bs.tinit();
+
+	// Set Block header
+	// Push BFINAL (0b1) and BTYPE (0b01) as 0x011 [read from right to left]
+	bs.push(0b011, 3);
+
+	foreach(c: input)
+	{
+		bs.push(codes[c], len[c], false);
+	}
+
+	// Add end of block code 256
+	bs.push(codes[256], len[256], false);
+
+	foreach (i, b : bs.list)
+	{
+		io::printfn("bytes %2d: 0x%02x 0b%08b", i, b, b);
+	}
+
+	return bs.list.to_array(allocator);
+}
+
+<*
+ RFC 1951, Section 3.2.2. Use of Huffman coding in the "deflate" format
+
+ @param bit_len : "Array with bit bit_len of Huffman codes"
+ @return "Huffman codes"
+ @require bit_len.len == 288 : "Code bit_len array must contain exactly 288 elements"
+*>
+fn uint[] gen_huff(int[288] bit_len)
+{
+	// Toy model in RFC:
+	// int[*] bit_len = { 3, 3, 3, 3, 3, 2, 4, 4 };
+	// char[*] sym = "ABCDEFGH";
+
         // 1)  Count the number of codes for each code length.  Let
         //     bl_count[N] be the number of codes of length N, N >= 1.
 
 	HashMap{int, int} bl_count;
 	bl_count.tinit();
-	foreach (len: lens) bl_count[len] += 1;
-	io::printfn("bl_count[N]: %s", bl_count);
+	foreach (len: bit_len) bl_count[len] += 1;
+	// io::printfn("bl_count[N]: %s", bl_count);
 
         // 2)  Find the numerical value of the smallest code for each
         //     code length:
@@ -123,7 +158,7 @@ fn int[] gen_huff()
 	        code = (code + bl_count[bits-1] ?? 0) << 1;
 	        next_code.push(code);
 	}
-	io::printfn("next_code[N]: %s", next_code);
+	// io::printfn("next_code[N]: %s", next_code);
 
         // 3)  Assign numerical values to all codes, using consecutive
         //     values for all codes of the same length with the base
@@ -131,12 +166,11 @@ fn int[] gen_huff()
         //     (which have a bit length of zero) must not be assigned a
         //     value.
 
-	int[] codes = mem::temp_array(int, lens.len);
-	foreach (i, len: lens)
+	uint[] codes = mem::temp_array(uint, bit_len.len);
+	foreach (i, len: bit_len)
 	{
 		if (len == 0) continue;
-		// io::printfn("%c\t%d\t%0*b", sym[i], len, len, next_code[len]);
-		io::printfn("%4d\t%d\t%0*b", i, len, len, next_code[len]);
+		// io::printfn("%4d\t%d\t%0*b", i, len, len, next_code[len]);
 		codes[i] = next_code[len];
 		next_code[len]++;
 	}
