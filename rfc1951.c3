@@ -65,6 +65,7 @@ fn void main()
 {
 	no_compression();
 	fixed_huff();
+	dynamic_huff();
 }
 
 // macro void? write_le_16(stream, ushort s)
@@ -84,6 +85,9 @@ fn void no_compression() => @pool()
 	verify(encoded, input[..], "no_comp");
 }
 
+<*
+ TODO: Enforce max block size of 65'535 as defined in the RFC.
+*>
 fn char[] nocomp_encode(char[] input, Allocator allocator) => @pool()
 {
 	DynamicBitList bs;
@@ -117,6 +121,111 @@ fn char[] nocomp_encode(char[] input, Allocator allocator) => @pool()
 	return bs.list.to_array(allocator);
 }
 
+fn void dynamic_huff() => @pool()
+{
+	io::printn("-- dynamic huffman encoding --");
+
+	// Fixed Huffman codes bit_len
+	int[*] bit_len = {
+		[  0..143] = 8,
+		[144..255] = 9,
+		[256..279] = 7,
+		[280..287] = 8,
+	};
+
+	// Generate the fixed Huffman codes
+	uint[] huff_codes = gen_huff(bit_len[..]);
+
+	// Distance codes bit_len
+	int[*] dist_len = {
+		[0..32] = 5,
+	};
+
+	// Generate the distance codes
+	uint[] dist_codes = gen_huff(bit_len[..]);
+
+	// Input string to be deflated
+	char[] s = "hello world";
+
+	// Encode string
+	char[] encoded = dynamic_huff_encode(s,
+			huff_codes, bit_len[..],
+			dist_codes, dist_len[..],
+		tmem);
+
+	verify(encoded, s, "dynamic_huff");
+}
+
+fn char[] dynamic_huff_encode(char[] input, uint[] codes, int[] len,
+					uint[]dist_codes, int[] dist_len,
+			Allocator allocator) => @pool()
+{
+	DynamicBitList bs;
+	bs.tinit();
+
+	// Set Block header
+	// Push BFINAL (0b1) and BTYPE (0b10) as 0x101 [read from right to left]
+	bs.push(0b101, 3);
+
+	// Push 5 bits HLIT (# of literal/length codes - 257)
+	bs.push(codes.len-257-2, 5, true);
+
+	// Push 5 bits HDIST (# of distance codes - 1)
+	bs.push(dist_codes.len-1-2, 5, true);
+
+	// Push 4 bits HCLEN (# of code length codes - 4)
+	bs.push(19-4, 4, true);
+
+	// Create Huff codes for hc
+	int hc_bit_len = 7;
+	int[*] hc_len = { [0..18] = hc_bit_len };
+	uint[] hc_codes = gen_huff(hc_len[..]);
+	uint[] hc_order = {
+		16, 17, 18,  0,  8,
+		 7,  9,  6, 10,  5,
+		11,  4, 12,  3, 13,
+	 	 2, 14,  1, 15 };
+
+	// Assume for now that we use all 19 codes with a code bit length of 3
+	// bits
+	for (usz i = 0; i < 19; i++)
+	{
+		// bs.push(hc_len[hc_order[i]], 3, true);
+		bs.push(hc_len[hc_order[i]], 3, true);
+	}
+
+	// Now save the literal/length tree, hc-encoded
+	foreach(l: len)
+	{
+		bs.push(hc_codes[hc_order[l]], hc_bit_len, false);
+	}
+
+	// Now save the distance/tree, hc-encoded
+	foreach(l: dist_len)
+	{
+		bs.push(hc_codes[hc_order[l]], hc_bit_len, false);
+	}
+
+	// And finally the compressed data
+	foreach(c: input)
+	{
+		bs.push(codes[c], len[c], false);
+	}
+
+	// Add end of block code 256
+	bs.push(codes[256], len[256], false);
+
+	foreach (i, b : bs.list)
+	{
+		io::printfn("bytes %2d: 0x%02x 0b%08b", i, b, b);
+	}
+
+	return bs.list.to_array(allocator);
+}
+
+<*
+ TODO: Entire LZ (length/distance) pairs part is currently not implemented.
+*>
 fn void fixed_huff() => @pool()
 {
 	io::printn("-- fixed huffman encoding --");
@@ -130,21 +239,21 @@ fn void fixed_huff() => @pool()
 	};
 
 	// Generate the fixed Huffman codes
-	uint[] huff_codes = gen_huff(bit_len);
+	uint[] huff_codes = gen_huff(bit_len[..]);
 
-	// Distance codes bit_len
-	int[*] bit_len = {
+	// Distance codes dist_len
+	int[*] dist_len = {
 		[  0..32] = 5,
 	};
 
 	// Generate the distance codes
-	uint[] dist_codes = gen_huff(bit_len);
+	uint[] dist_codes = gen_huff(dist_len[..]);
 
 	// Input string to be deflated
 	char[] s = "hello world";
 
 	// Encode string
-	char[] encoded = huff_encode(s, huff_codes, bit_len[..], tmem);
+	char[] encoded = fixed_huff_encode(s, huff_codes, bit_len[..], tmem);
 
 	verify(encoded, s, "fixed_huff");
 }
@@ -167,7 +276,7 @@ fn void verify(char[] encoded, char[] input, String test_name)
  Encode char[] with the provided Huffman codes and bit lengths.
  @require codes.len == len.len
 *>
-fn char[] huff_encode(char[] input, uint[] codes, int[] len, Allocator allocator) => @pool()
+fn char[] fixed_huff_encode(char[] input, uint[] codes, int[] len, Allocator allocator) => @pool()
 {
 	DynamicBitList bs;
 	bs.tinit();
@@ -194,12 +303,12 @@ fn char[] huff_encode(char[] input, uint[] codes, int[] len, Allocator allocator
 
 <*
  RFC 1951, Section 3.2.2. Use of Huffman coding in the "deflate" format
+ require bit_len.len == 288 || bit_len.len == 19: "Code bit_len array must contain exactly 288 or 19 elements"
 
  @param bit_len : "Array with bit bit_len of Huffman codes"
  @return "Huffman codes"
- @require bit_len.len == 288 : "Code bit_len array must contain exactly 288 elements"
 *>
-fn uint[] gen_huff(int[288] bit_len)
+fn uint[] gen_huff(int[] bit_len)
 {
 	// Toy model in RFC:
 	// int[*] bit_len = { 3, 3, 3, 3, 3, 2, 4, 4 };
