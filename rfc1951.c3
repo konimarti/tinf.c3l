@@ -34,6 +34,11 @@ macro BitState get_bit_state(uint b, isz pos)
 }
 
 <*
+ TODO: Implement a bit reversal when generating the huff code; then we can
+ avoid lsb
+
+ TODO: Also, push entire bits in one go instead of individual bits
+
  @param b        : "Bits to be pushed"
  @param num_bits : "Number of bits to push"
  @param lsb      : "Order from which side to start pushing bits"
@@ -64,10 +69,10 @@ fn void DynamicBitList.push(&self, uint b, usz num_bits, bool lsb = true)
 fn void main()
 {
 	// test_huff_tree();
-	test_package_merge();
+	// test_package_merge();
 	// no_compression();
 	// fixed_huff();
-	// dynamic_huff();
+	dynamic_huff();
 }
 
 // macro void? write_le_16(stream, ushort s)
@@ -81,9 +86,14 @@ fn void no_compression() => @pool()
 {
 	io::printn("-- no compression --");
 	// char[] input = "hello world";
-	char[1024] input;
-	foreach (i, &e : input) *e = (char)(i % 255);
+	char[] input = "12";
+
+	// char[1024] input;
+	// foreach (i, &e : input) *e = (char)(i % 255);
+
 	char[] encoded = nocomp_encode(input[..], tmem);
+	io::printfn("%s", hex::tencode(encoded));
+
 	verify(encoded, input[..], "no_comp");
 }
 
@@ -110,7 +120,7 @@ fn char[] nocomp_encode(char[] input, Allocator allocator) => @pool()
 	bs.push((char)(nlen>>8), 8, lsb: true);
 
 	// Encode data
-	foreach(c: input)
+	foreach(i, c: input)
 	{
 		bs.push(c, 8, lsb: true);
 	}
@@ -127,27 +137,25 @@ fn void dynamic_huff() => @pool()
 {
 	io::printn("-- dynamic huffman encoding --");
 
-	// Fixed Huffman codes bit_len
-	int[*] bit_len = {
-		[  0..143] = 8,
-		[144..255] = 9,
-		[256..279] = 7,
-		[280..287] = 8,
-	};
+	// Input string to be deflated
+	char[] s = "hello world";
+
+	// Calculate frequencies and bit lengths
+	int[257] freqs;
+	foreach (c: s) freqs[c]++;
+	freqs[256]++; // don't forget end of block marker
+	uint[] bit_len = package_merge(freqs[..], 15, tmem);
 
 	// Generate the fixed Huffman codes
 	uint[] huff_codes = gen_huff(bit_len[..]);
 
 	// Distance codes bit_len
 	int[*] dist_len = {
-		[0] = 1,
+		[0] = 0, // one distance code with zero bits -> no distance code used
 	};
 
 	// Generate the distance codes
 	uint[] dist_codes = gen_huff(dist_len[..]);
-
-	// Input string to be deflated
-	char[] s = "hello world";
 
 	// Encode string
 	char[] encoded = dynamic_huff_encode(s,
@@ -162,12 +170,9 @@ fn char[] dynamic_huff_encode(char[] input, uint[] codes, int[] len,
 					uint[]dist_codes, int[] dist_len,
 			Allocator allocator) => @pool()
 {
+	// FIXME: this still doesn't work...
 
-	// FIXME: this is faulty.
-	// We need to create a proper codegen from the literal and distance
-	// lengths
-
-	// Create Huff codegen
+	// Create code-length Huff codes
 	uint[] hc_order = {
 		16, 17, 18,  0,  8,
 		 7,  9,  6, 10,  5,
@@ -182,16 +187,22 @@ fn char[] dynamic_huff_encode(char[] input, uint[] codes, int[] len,
 	        18,  0,  1, 2
 	};
 
-	int hc_bit_len = 7;
-	int[*] hc_len = { [0..18] = 0 };
+	int[*] freqs = { [0..18] = 0 };
+	foreach (l: len)      freqs[hc_order_lookup[l]]++;
+	foreach (l: dist_len) freqs[hc_order_lookup[l]]++;
 
-	foreach (l: len) hc_len[hc_order_lookup[l]] = hc_bit_len;
-	foreach (l: dist_len) hc_len[hc_order_lookup[l]] = hc_bit_len;
+	io::printfn("frequencies");
+	foreach (i, freq: freqs)
+	{
+		io::printfn("%d\t%d\t%d", i, hc_order[i], freq);
+	}
 
-	uint[] hc_codes = gen_huff(hc_len[..]);
+	uint[] hc_len = package_merge(freqs[..], 5, tmem);
+	uint[] hc_codes = gen_huff(hc_len);
+
 	foreach (i, code : hc_codes)
 	{
-	io::printfn("hc_codes %d %08b ", hc_order[i], hc_codes[i]);
+		io::printfn("hc_codes %d %08b ", hc_order[i], hc_codes[i]);
 	}
 
 	DynamicBitList bs;
@@ -221,6 +232,7 @@ fn char[] dynamic_huff_encode(char[] input, uint[] codes, int[] len,
 	// Now save the literal/length tree, hc-encoded
 	foreach(l: len)
 	{
+		io::printfn("in: %d", l);
 		usz index = hc_order_lookup[l];
 		bs.push(hc_codes[index], hc_len[index], false);
 	}
@@ -228,6 +240,7 @@ fn char[] dynamic_huff_encode(char[] input, uint[] codes, int[] len,
 	// Now save the distance/tree, hc-encoded
 	foreach(l: dist_len)
 	{
+		io::printfn("in: %d", l);
 		usz index = hc_order_lookup[l];
 		bs.push(hc_codes[index], hc_len[index], false);
 	}
@@ -243,7 +256,7 @@ fn char[] dynamic_huff_encode(char[] input, uint[] codes, int[] len,
 
 	foreach (i, b : bs.list)
 	{
-		io::printfn("bytes %2d: 0x%02x 0b%08b", i, b, b);
+		// io::printfn("bytes %2d: 0x%02x 0b%08b", i, b, b);
 	}
 
 	return bs.list.to_array(allocator);
@@ -277,9 +290,11 @@ fn void fixed_huff() => @pool()
 
 	// Input string to be deflated
 	char[] s = "hello world";
+	foreach (c: s) io::printfn("code[%c] = %08b", c, huff_codes[c]);
 
 	// Encode string
 	char[] encoded = fixed_huff_encode(s, huff_codes, bit_len[..], tmem);
+	io::printfn("%s", hex::tencode(encoded));
 
 	verify(encoded, s, "fixed_huff");
 }
