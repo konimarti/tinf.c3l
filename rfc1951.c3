@@ -68,10 +68,10 @@ fn void DynamicBitList.push(&self, uint b, usz num_bits, bool lsb = true)
 
 fn void main()
 {
-	// test_huff_tree();
-	// test_package_merge();
-	// no_compression();
-	// fixed_huff();
+	test_huff_tree();
+	test_package_merge();
+	no_compression();
+	fixed_huff();
 	dynamic_huff();
 }
 
@@ -144,7 +144,9 @@ fn void dynamic_huff() => @pool()
 	int[257] freqs;
 	foreach (c: s) freqs[c]++;
 	freqs[256]++; // don't forget end of block marker
+
 	uint[] bit_len = package_merge(freqs[..], 15, tmem);
+	// uint[] bit_len = huff_bit_counts(freqs[..], 15);
 
 	// Generate the fixed Huffman codes
 	uint[] huff_codes = gen_huff(bit_len[..]);
@@ -162,6 +164,7 @@ fn void dynamic_huff() => @pool()
 			huff_codes[:257], bit_len[:257],
 			dist_codes, dist_len[..],
 		tmem);
+	io::printfn("%s", hex::tencode(encoded));
 
 	verify(encoded, s, "dynamic_huff");
 }
@@ -170,8 +173,6 @@ fn char[] dynamic_huff_encode(char[] input, uint[] codes, int[] len,
 					uint[]dist_codes, int[] dist_len,
 			Allocator allocator) => @pool()
 {
-	// FIXME: this still doesn't work...
-
 	// Create code-length Huff codes
 	uint[] hc_order = {
 		16, 17, 18,  0,  8,
@@ -180,29 +181,29 @@ fn char[] dynamic_huff_encode(char[] input, uint[] codes, int[] len,
 	 	 2, 14,  1, 15,
 	 };
 
-	uint[] hc_order_lookup = {
-	   	 3, 17, 15, 13, 11,
-		 9,  7,  5,  4,  6,
-		 8, 10, 12, 14, 16,
-	        18,  0,  1, 2
-	};
-
+	// Record bitlen frequencies
 	int[*] freqs = { [0..18] = 0 };
-	foreach (l: len)      freqs[hc_order_lookup[l]]++;
-	foreach (l: dist_len) freqs[hc_order_lookup[l]]++;
+	foreach (l: len)      freqs[l]++;
+	foreach (l: dist_len) freqs[l]++;
 
 	io::printfn("frequencies");
 	foreach (i, freq: freqs)
 	{
-		io::printfn("%d\t%d\t%d", i, hc_order[i], freq);
+		io::printfn("%d\t%d", i, freq);
 	}
 
+	io::printfn("freqs       : %s", freqs);
+	// Create code-length Huff codes
 	uint[] hc_len = package_merge(freqs[..], 5, tmem);
+	io::printfn("counts (pm)  : %s", hc_len);
+	// FIXME: here, the huff_tree bit count do not work
+	// hc_len = huff_bit_counts(freqs[..], 5);
+	// io::printfn("counts (tree): %s", hc_len);
 	uint[] hc_codes = gen_huff(hc_len);
 
 	foreach (i, code : hc_codes)
 	{
-		io::printfn("hc_codes %d %08b ", hc_order[i], hc_codes[i]);
+		io::printfn("hc_codes %2d %08b (len:%d)", i, hc_codes[i], hc_len[i]);
 	}
 
 	DynamicBitList bs;
@@ -222,27 +223,23 @@ fn char[] dynamic_huff_encode(char[] input, uint[] codes, int[] len,
 	bs.push(hc_codes.len-4, 4, true);
 
 	// Assume for now that we use all 19 codes with a code bit length of 3
-	// bits
+	// bits; ensure that they are written in the expected order
 	for (usz i = 0; i < 19; i++)
 	{
 		io::printfn("having: %d -> %d -> %d", i, hc_order[i], hc_len[i]);
-		bs.push(hc_len[i], 3, true);
+		bs.push(hc_len[hc_order[i]], 3, true);
 	}
 
 	// Now save the literal/length tree, hc-encoded
 	foreach(l: len)
 	{
-		io::printfn("in: %d", l);
-		usz index = hc_order_lookup[l];
-		bs.push(hc_codes[index], hc_len[index], false);
+		bs.push(hc_codes[l], hc_len[l], false);
 	}
 
 	// Now save the distance/tree, hc-encoded
 	foreach(l: dist_len)
 	{
-		io::printfn("in: %d", l);
-		usz index = hc_order_lookup[l];
-		bs.push(hc_codes[index], hc_len[index], false);
+		bs.push(hc_codes[l], hc_len[l], false);
 	}
 
 	// And finally the compressed data
@@ -253,11 +250,6 @@ fn char[] dynamic_huff_encode(char[] input, uint[] codes, int[] len,
 
 	// Add end of block code 256
 	bs.push(codes[256], len[256], false);
-
-	foreach (i, b : bs.list)
-	{
-		// io::printfn("bytes %2d: 0x%02x 0b%08b", i, b, b);
-	}
 
 	return bs.list.to_array(allocator);
 }
@@ -303,7 +295,11 @@ fn void verify(char[] encoded, char[] input, String test_name)
 {
 	// Decompress with inflate
 	char[1024] output;
-	inflate::uncompress(output[..], encoded)!!;
+	if (catch err = inflate::uncompress(output[..], encoded))
+	{
+		io::printfn("failed in: %s", test_name);
+		abort();
+	}
 	// io::printfn("uncompressed: '%s'", (String)output[..]);
 
 	String want = (String)input[:input.len];
@@ -429,34 +425,15 @@ fn uint[] gen_huff(int[] bit_len)
 
 fn void test_huff_tree()
 {
-	uint[] freqs = {4,4,4,3,2,1};
-	uint[] bl_count = huff_bit_counts(freqs, 5);
-	io::printfn("bl_count: %s", bl_count);
+	uint[] freqs = {4,2,0,3,2,0};
+	uint[] counts = huff_bit_counts(freqs, 15);
+	io::printfn("huff_tree_bit counts: %s", counts);
 
-	const MAX_BITS = 32; // ??
+	uint[] pm_counts = package_merge(freqs, 15, tmem);
+	io::printfn("package-merge counts: %s", pm_counts);
 
-	List{int} next_code;
-	next_code.tinit();
-	next_code.push(0); // Move index to 1
 
-	int code = 0;
-	for (int bits = 1; bits <= bl_count.len; bits++)
-	{
-	        code = (code + bl_count[bits-1]) << 1;
-	        next_code.push(code);
-	}
-
-	uint[] codes = mem::temp_array(uint, freqs.len);
-	usz code_pos = 0;
-	foreach (len, counts : bl_count)
-	{
-		if (len == 0) continue;
-		while (counts--)
-		{
-			codes[code_pos++] = next_code[len];
-			next_code[len]++;
-		}
-	}
+	uint[] codes = gen_huff(counts[..]);
 
 	foreach (i, hcode : codes)
 	{
@@ -470,153 +447,82 @@ struct Node
 {
 	NodeType type;
 	uint freq;
+	usz pos;
 	Node *left;
 	Node *right;
 }
 
 fn bool Node.less(&self, Node* b) => self.freq < b.freq;
 
-fn Node* make_node(NodeType type, uint freq = char.max, Allocator allocator = tmem)
+fn Node* make_node(NodeType type, uint freq, usz pos, Allocator allocator = tmem)
 {
-	return allocator::new(allocator, Node, { type, freq, null, null });
+	return allocator::new(allocator, Node, { type, freq, pos, null, null });
 }
 
-// Create a huffman tree from a set of frequencies.  Ensure that the huffman
-// codes are not longer than max_bits (adding max-bits - 1 dummy nodes).
+// Create a huffman tree from a set of frequencies. Ensure that the huffman
+// codes are not longer than max_bits (adding max-bits - 1 dummy nodes)? Not
+// sure if that's the case here.
 // Returning the bit lengths for the huffman codes.
 <*
- @require max_bits < 16
+ @require max_bits >= 2 && max_bits < 16
 *>
 fn uint[] huff_bit_counts(uint[] freqs, uint max_bits)
 {
-	usz n = freqs.len + max_bits - 1;
-	// HuffHeap heap = { mem::temp_array(Node*, n), 0, n };
-
 	PriorityQueue{Node*} heap;
 	heap.tinit();
 
 	// Fill heap with freqs
-	foreach (freq : freqs)
+	foreach (i, freq : freqs)
 	{
-		heap.push(make_node(NodeType.LEAF, freq));
+		if (freq == 0) continue;
+		heap.push(make_node(NodeType.LEAF, freq, i));
 	}
 	// Add max_bits - 1 dummy nodes
 	for (usz i = 0; i < max_bits - 1; i++)
 	{
-		heap.push(make_node(NodeType.DUMMY));
+		heap.push(make_node(NodeType.DUMMY, 1<<20, 0));
 	}
 
-	// heap.display();
-
-	while (heap.len() != 1)
+	while (heap.len() > 1)
 	{
 		Node *a = heap.pop()!!;
 		Node *b = heap.pop()!!;
 		uint new_freq = a.freq + b.freq;
-		Node *new_node = make_node(NodeType.INTERNAL, new_freq);
+		Node *new_node = make_node(NodeType.INTERNAL, new_freq, 0);
 		io::printfn("combine %d + %d = %d", a.freq, b.freq, new_freq);
 		new_node.left = a;
 		new_node.right = b;
 		heap.push(new_node);
-		// heap.display();
 	}
 
-	// heap.first() contains now root node
-	// uint[] counts = mem::temp_array(uint, (usz)(max_bits+1));
-	uint[] counts = mem::temp_array(uint, max_bits);
-	dfs_traverse(heap.first()!!, counts, -(max_bits-2));
-	// dfs_traverse(heap.first()!!, counts, 0);
+	uint[] counts = allocator::new_array(tmem, uint, freqs.len);
+
+	// heap.first() points to root node
+	huff_tree_traverse(heap.first()!!, counts, 0, freqs.len-1);
+
+	// io::printfn("huff_bit_counts: counts=%s", counts);
+
+	// Remove depth from dummy node
+	uint off = (uint)(math::log2(max_bits - 1)+0.5);
+	foreach (&count: counts) if (*count > off) *count -= off;
+
+	// io::printfn("huff_bit_counts: counts=%s", counts);
+
 	return counts;
 }
 
-fn void dfs_traverse(Node *n, uint[] counts, uint depth)
+fn void huff_tree_traverse(Node *n, uint[] counts, uint depth, uint max_depth)
 {
 	if (n.type == LEAF)
 	{
-		io::printfn("depth = %d [freq:%d]", depth, n.freq);
-		counts[depth] += 1;
+		assert(counts[n.pos] == 0);
+		counts[n.pos] = depth;
 		return;
 	}
 
 	// Recurse through dummies and internal
-	if (n.left != null) dfs_traverse(n.left, counts, depth+1);
-	if (n.right != null) dfs_traverse(n.right, counts, depth+1);
-}
-
-struct HuffHeap
-{
-	Node*[] heap;
-	usz size;
-	usz capacity;
-}
-
-fn void HuffHeap.display(&self)
-{
-	for (usz i = 0; i < self.size; i++)
-	{
-		io::printf("(%d)", self.heap[i].freq);
-	}
-	io::printn("");
-}
-
-fn usz HuffHeap.len(&self) => self.size;
-
-fn Node*? HuffHeap.first(&self)
-{
-	return self.heap[0];
-}
-
-fn void HuffHeap.push(&self, Node* node)
-{
-	assert(self.size < self.capacity);
-
-	self.heap[self.size] = node;
-	usz i = self.size;
-	self.size++;
-
-	// Heapify up
-	usz parent;
-	while (i > 0)
-	{
-		parent = (i - 1 ) / 2;
- 		if (self.heap[parent].freq < self.heap[i].freq) break;
-
-		@swap(self.heap[i], self.heap[parent]);
-		i = parent;
-	}
-}
-
-fn Node*? HuffHeap.pop(&self)
-{
-	usz i = 0;
-	Node* top = self.heap[i];
-
-	// Replace with last element
-	self.heap[i] = self.heap[self.size - 1];
-	self.size--;
-
-	// Heapify down
-	while (1)
-	{
-		usz left = 2 * i + 1;
-		usz right = 2 * i + 2;
-		usz smallest = i;
-
-		if (left < self.size && self.heap[left].freq < self.heap[smallest].freq)
-		{
-			smallest = left;
-		}
-		if (right < self.size && self.heap[right].freq < self.heap[smallest].freq)
-		{
-			smallest = right;
-		}
-
-		if (smallest == i) break;
-
-		@swap(self.heap[i], self.heap[smallest]);
-		i = smallest;
-	}
-	return top;
+	if (n.left != null)  huff_tree_traverse(n.left, counts, depth+1, max_depth);
+	if (n.right != null) huff_tree_traverse(n.right, counts, depth+1, max_depth);
 }
 
 fn void test_package_merge()
@@ -665,9 +571,9 @@ fn uint[] package_merge(uint[] freqs, uint max_bits, Allocator allocator) => @po
 	}
 
 	// Sort in ascending order
-	io::printfn("before: %s", mappings);
+	// io::printfn("before: %s", mappings);
 	sort::quicksort(mappings.array_view());
-	io::printfn("after:  %s", mappings);
+	// io::printfn("after:  %s", mappings);
 
 	uint[] hist = mem::temp_array(uint, num_codes);
 	foreach (i, m: mappings) hist[i] = m.freq;
