@@ -68,11 +68,12 @@ fn void DynamicBitList.push(&self, uint b, usz num_bits, bool lsb = true)
 
 fn void main()
 {
-	test_huff_tree();
-	test_package_merge();
-	no_compression();
-	fixed_huff();
-	dynamic_huff();
+	// test_huff_tree();
+	// test_package_merge();
+	test_lz77();
+	// no_compression();
+	// fixed_huff();
+	// dynamic_huff();
 }
 
 // macro void? write_le_16(stream, ushort s)
@@ -740,5 +741,212 @@ fn void test_package_merge_fn() @test => @pool()
 	uint[] counts = package_merge(freqs, 5, tmem);
 	assert(freqs.len == counts.len);
 	assert(counts == {2,2,2,0,3,4,4});
+}
+
+//
+// An idea for LZ77-style compressor:
+//
+// X Y Z A B
+// X Y Z
+//   Y Z A
+//     Z A B
+
+// 1) fill up queue
+// 2) calculate hash XYZ
+// 3) check if hash value found;
+//     if found -> go to 4.
+//     else emit literal X, pop x and add new byte to queue
+// 4) foreach entry, calculate match_len, return max_match_len
+// 5) repeat steps 2-4 for YZA, ZAB
+// 6) find max_match_len(XYZ, YZA, ZAB)
+//    if max_match_len(XYZ), emit XYZ tuple, move 1 byte
+//    if max_match_len(YZA), emit literal X, move 1 byte, emit YZA tuple, move 1 byte
+//    if max_match_len(ZAB), emit literal X and literal Y, move 2 byte, emit ZAB tuple, move 1 byte
+// 7) terminate loop if input is consumed
+//
+//
+// struct DictEncoder (OutStream)
+// {
+// 	RingBuffer{ char[1<<15] }     window; // Sliding window
+// 	HashMap{ HashKey, HashChain } index;
+// 	Token[]                       tokens;
+// 	RingBuffer{ char[258] }       queue;
+// }
+//
+//
+// fn usz? DictEncoder.write(&self, char[] bytes) @dynamic
+// {
+// 	usz written;
+// 	foreach (c: bytes)
+// 	{
+// 		self.queue.push(c);
+// 		written++;
+// 		if (self.queue.len() == 5)
+// 		{
+// 			HashKey[3] keys;
+// 			foreach (i, &key: keys)
+// 			{
+// 				self.queue.read(i, key.bytes[..]);
+// 			}
+// 			if (try chain = self.index[keys[0]])
+// 			{
+//
+// 			}
+// 			else
+// 			{
+// 				// TODO: emit X literal
+// 				if (try x = self.queue.pop)
+// 				{
+// 					self.window.push(x);
+// 				}
+// 				self.queue.pop();
+// 			}
+// 		}
+// 	}
+// 	if (self.queue.len())
+// 	{
+// 		// TODO: drain queue
+// 	}
+// 	return written;
+// }
+
+enum TokenType
+{
+	LITERAL,
+	LENDIST
+}
+
+struct Token (Printable)
+{
+	TokenType type;
+	union
+	{
+		char      literal;
+		ushort[2] lendist; // Length, Distance
+	}
+}
+fn usz? Token.to_format(&self, Formatter *f) @dynamic
+{
+	switch (self.type)
+	{
+		case LITERAL: return f.printf("LITERAL<%c>", self.literal);
+		case LENDIST: return f.printf("LENDIST<%s>", self.lendist);
+		default: unreachable("invalid token type");
+	}
+}
+
+union HashKey (Printable)
+{
+	char[3] bytes;
+	uint    h;
+}
+fn uint HashKey.hash(&self) => self.h;
+fn bool HashKey.equals(&self, HashKey other) => self.h == other.h;
+fn usz? HashKey.to_format(&self, Formatter *f) @dynamic => f.printf("%s", (String)self.bytes[..]);
+
+alias HashChain = LinkedList{ isz };
+
+fn Token[] lz77_tokenize(Allocator allocator, String s, isz match_len) => @pool()
+{
+	usz i;
+	List{Token} tokens;
+	tokens.tinit();
+
+	// Prepare hash and process inS                                                        SSSSSSSSSSSSSSSDFDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD
+	HashMap{ HashKey, HashChain } hash;
+	hash.tinit();
+	for (i = 0; i < s.len - 2; i++)
+	{
+		HashKey key = { .bytes = s[i:3] };
+		io::printfn("hash key %s at %d", key, i);
+
+		if (try chain = hash.get_ref(key))
+		{
+			// We have a match: Find max_match_len in chain
+			ushort max_match_len, dist;
+			foreach (pos: chain)
+			{
+				io::printfn("checking pos %d", pos);
+				if (i - pos > match_len) continue;
+
+				usz j = 0;
+				while (i + j < s.len && s[pos+j] == s[i+j]) j++;
+				if (j > max_match_len)
+				{
+					max_match_len = (ushort)j;
+					dist = (ushort)(i - pos);
+				}
+			}
+
+			if (max_match_len > 0 && dist > 0)
+			{
+				// Emit length/distance token
+				tokens.push({.type=LENDIST, .lendist={max_match_len, dist}});
+				i += max_match_len;
+			}
+			else
+			{
+				// No match: it's a literal!
+				// Emit literal token
+				tokens.push({LITERAL, s[i]});
+			}
+
+			chain.push_front(i);
+		}
+		else
+		{
+			// No match: it's a literal!
+			// Emit literal token
+			tokens.push({LITERAL, s[i]});
+
+			// Store current hash
+			HashChain chain;
+			chain.tinit();
+			chain.push_front(i);
+			hash[key] = chain;
+		}
+	}
+
+	io::printfn("hash index: %s", hash);
+
+	// Emit remaing literal tokens
+	for (; i < s.len; i++)
+	{
+		// Emit literal token
+		tokens.push({LITERAL, s[i]});
+	}
+
+	return tokens.to_array(allocator);
+}
+
+fn char[] lz77_construct(Allocator allocator, Token[] tokens) => @pool()
+{
+	DString buf;
+	buf.tinit();
+
+	foreach (token: tokens)
+	{
+		switch (token.type)
+		{
+			case LITERAL:
+				buf.append_char(token.literal);
+			case LENDIST:
+				ushort len = token.lendist[0];
+				ushort dist = token.lendist[1];
+				String ref = buf.str_view()[buf.len()-dist:len];
+				buf.append_string(ref);
+		}
+	}
+
+	return buf.copy_str(allocator);
+}
+
+fn void test_lz77()
+{
+	String s = "hello world hello";
+	Token[] tokens = lz77_tokenize(tmem, s, 32);
+	io::printfn("%s", tokens);
+
+	io::printfn("construct: '%s'", (String)lz77_construct(tmem, tokens));
 }
 
