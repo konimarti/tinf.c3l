@@ -810,27 +810,42 @@ fn void test_package_merge_fn() @test => @pool()
 // 	return written;
 // }
 
-enum TokenType
+enum TokenType : inline char
 {
+	INVALID,
 	LITERAL,
-	LENDIST
+	MATCH
 }
 
-struct Token (Printable)
+// struct Token (Printable)
+// {
+// 	TokenType type;
+// 	union
+// 	{
+// 		char      literal;
+// 		ushort[2] lendist; // Length, Distance
+// 	}
+// }
+const ushort MIN_MATCH_LEN   = 3;
+const ushort MAX_MATCH_LEN   = 256;
+const ushort MAX_WINDOW_SIZE = 1 << 15;
+const uint   MIN_OFFSET_LEN  = 3;
+
+bitstruct Token (Printable) : uint @bigendian @overlap
 {
-	TokenType type;
-	union
-	{
-		char      literal;
-		ushort[2] lendist; // Length, Distance
-	}
+	TokenType type : 0..2;   //  2 bits: 0 = INVALID, 1 = LITERAL, 2 = MATCH, 3 = EOF
+	ushort    len  : 3..10;  //  8 bits: xlength = length - MIN_MATCH_LENGTH
+	uint      off  : 11..31; // 20 bits: xoffset = offset - MIN_OFFSET_SIZE
+	char      lit  : 24..31; //  8 bits: store literal
 }
+fn Token make_literal(char literal) => (Token){ .type = LITERAL, .lit = literal };
+fn Token make_match(ushort len, uint off) => (Token){ .type = MATCH, .len = len, .off = off };
 fn usz? Token.to_format(&self, Formatter *f) @dynamic
 {
 	switch (self.type)
 	{
-		case LITERAL: return f.printf("LITERAL<%c>", self.literal);
-		case LENDIST: return f.printf("LENDIST<%s>", self.lendist);
+		case LITERAL: return f.printf("LITERAL<%c>", self.lit);
+		case MATCH:   return f.printf("MATCH<%d:%d>", self.off, self.len);
 		default: unreachable("invalid token type");
 	}
 }
@@ -846,9 +861,12 @@ fn usz? HashKey.to_format(&self, Formatter *f) @dynamic => f.printf("%s", (Strin
 
 alias HashChain = LinkedList{ isz };
 
-fn Token[] lz77_tokenize(Allocator allocator, String s, isz match_len) => @pool()
+fn Token[] lz77_tokenize(Allocator allocator, String s, ushort window_size = MAX_WINDOW_SIZE) => @pool()
 {
 	usz i;
+	ushort len, max_match_len;
+	uint offset;
+
 	List{Token} tokens;
 	tokens.tinit();
 
@@ -863,32 +881,46 @@ fn Token[] lz77_tokenize(Allocator allocator, String s, isz match_len) => @pool(
 		if (try chain = hash.get_ref(key))
 		{
 			// We have a match: Find max_match_len in chain
-			ushort max_match_len, dist;
-			foreach (pos: chain)
-			{
-				io::printfn("checking pos %d", pos);
-				if (i - pos > match_len) continue;
+			max_match_len = 0;
 
-				usz j = 0;
-				while (i + j < s.len && s[pos+j] == s[i+j]) j++;
-				if (j > max_match_len)
+			// TODO: iterate directly over nodes to be more performant
+			foreach (index, hash_pos: chain)
+			{
+				offset = (uint)(i - hash_pos);
+				if (offset > window_size)
 				{
-					max_match_len = (ushort)j;
-					dist = (ushort)(i - pos);
+					// Remove this node from the hash chain.
+					chain.remove_at(index);
+					continue;
+				}
+
+				// Find max match length.
+				len = 3;
+				while (i + len < s.len && s[hash_pos+len] == s[i+len])
+				{
+					len++;
+				}
+				if (len > max_match_len)
+				{
+					max_match_len = len;
 				}
 			}
 
-			if (max_match_len > 0 && dist > 0)
+			if (max_match_len > 0 && offset > 0)
 			{
-				// Emit length/distance token
-				tokens.push({.type=LENDIST, .lendist={max_match_len, dist}});
+				// Emit match token.
+				tokens.push(make_match(max_match_len, offset));
 				i += max_match_len;
+
+				// Adjust for overlap
+				usz overlap = (usz)max_match_len - offset;
+				if (overlap > 0) i -= overlap;
 			}
 			else
 			{
 				// No match: it's a literal!
-				// Emit literal token
-				tokens.push({LITERAL, s[i]});
+				// Emit literal token.
+				tokens.push(make_literal(s[i]));
 			}
 
 			chain.push_front(i);
@@ -896,10 +928,10 @@ fn Token[] lz77_tokenize(Allocator allocator, String s, isz match_len) => @pool(
 		else
 		{
 			// No match: it's a literal!
-			// Emit literal token
-			tokens.push({LITERAL, s[i]});
+			// Emit literal token.
+			tokens.push(make_literal(s[i]));
 
-			// Store current hash
+			// Store current hash in a new hash chain.
 			HashChain chain;
 			chain.tinit();
 			chain.push_front(i);
@@ -909,11 +941,11 @@ fn Token[] lz77_tokenize(Allocator allocator, String s, isz match_len) => @pool(
 
 	io::printfn("hash index: %s", hash);
 
-	// Emit remaing literal tokens
+	// Emit remaing literal tokens.
 	for (; i < s.len; i++)
 	{
 		// Emit literal token
-		tokens.push({LITERAL, s[i]});
+		tokens.push(make_literal(s[i]));
 	}
 
 	return tokens.to_array(allocator);
@@ -929,12 +961,16 @@ fn char[] lz77_construct(Allocator allocator, Token[] tokens) => @pool()
 		switch (token.type)
 		{
 			case LITERAL:
-				buf.append_char(token.literal);
-			case LENDIST:
-				ushort len = token.lendist[0];
-				ushort dist = token.lendist[1];
-				String ref = buf.str_view()[buf.len()-dist:len];
-				buf.append_string(ref);
+				buf.append_char(token.lit);
+			case MATCH:
+				usz start = buf.len() - token.off;
+				usz end   = start + token.len;
+				for (usz i = start; i < end; i++)
+				{
+					buf.append_char(buf[i]);
+				}
+			default:
+				continue;
 		}
 	}
 
@@ -943,7 +979,7 @@ fn char[] lz77_construct(Allocator allocator, Token[] tokens) => @pool()
 
 fn void test_lz77()
 {
-	String s = "hello world hello";
+	String s = "hello world world hello";
 	Token[] tokens = lz77_tokenize(tmem, s, 32);
 	io::printfn("%s", tokens);
 
