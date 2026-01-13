@@ -72,7 +72,7 @@ fn void main()
 	// test_package_merge();
 	test_lz77();
 	// no_compression();
-	// fixed_huff();
+	fixed_huff();
 	// dynamic_huff();
 }
 
@@ -255,9 +255,6 @@ fn char[] dynamic_huff_encode(char[] input, uint[] codes, int[] len,
 	return bs.list.to_array(allocator);
 }
 
-<*
- TODO: Entire LZ (length/distance) pairs part is currently not implemented.
-*>
 fn void fixed_huff() => @pool()
 {
 	io::printn("-- fixed huffman encoding --");
@@ -282,11 +279,11 @@ fn void fixed_huff() => @pool()
 	uint[] dist_codes = gen_huff(dist_len[..]);
 
 	// Input string to be deflated
-	char[] s = "hello world";
+	char[] s = "hello world wor";
 	foreach (c: s) io::printfn("code[%c] = %08b", c, huff_codes[c]);
 
 	// Encode string
-	char[] encoded = fixed_huff_encode(s, huff_codes, bit_len[..], tmem);
+	char[] encoded = fixed_huff_encode(s, huff_codes, bit_len[..], dist_codes, dist_len[..], tmem);
 	io::printfn("%s", hex::tencode(encoded));
 
 	verify(encoded, s, "fixed_huff");
@@ -314,7 +311,8 @@ fn void verify(char[] encoded, char[] input, String test_name)
  Encode char[] with the provided Huffman codes and bit lengths.
  @require codes.len == len.len
 *>
-fn char[] fixed_huff_encode(char[] input, uint[] codes, int[] len, Allocator allocator) => @pool()
+fn char[] fixed_huff_encode(char[] input, uint[] codes, int[] len,
+	uint[] dist_codes, int[] dist_len, Allocator allocator) => @pool()
 {
 	DynamicBitList bs;
 	bs.tinit();
@@ -323,9 +321,39 @@ fn char[] fixed_huff_encode(char[] input, uint[] codes, int[] len, Allocator all
 	// Push BFINAL (0b1) and BTYPE (0b01) as 0x011 [read from right to left]
 	bs.push(0b011, 3);
 
-	foreach(c: input)
+	usz x;
+	foreach(token: lz77_tokenize(tmem, (String)input))
 	{
-		bs.push(codes[c], len[c], false);
+		io::printfn("token: %s", token);
+		switch (token.type)
+		{
+			case LITERAL:
+				char c = token.lit;
+				bs.push(codes[c], len[c], false);
+
+			case MATCH:
+				// TODO: only implemented for lengths 3 - 10
+				assert(token.len<10);
+				io::printfn("len index: %d", 257+token.len);
+				bs.push(codes[257+token.len], len[257+token.len], false);
+
+				// TODO: this is hard-coded for the given example
+				bs.push(dist_codes[4], dist_len[4], false);
+				bs.push(1, 1, false);
+
+				// io::printfn("offset: %d", token.offset());
+				if (try tuple = huff_dist_lookup(token.offset()))
+				{
+					// io::printfn("tuple<dist_index, extra_bit> = %s", tuple );
+					// // Write distance code.
+					// bs.push(dist_codes[tuple.first], len[tuple.first], false);
+					// // Write extra bit.
+					// if (tuple.second) bs.push(token.offset()-tuple.first, tuple.second, false);
+				}
+				io::printfn("MATCH ENCODED");
+
+			default: unreachable("invalid token type");
+		}
 	}
 
 	// Add end of block code 256
@@ -337,6 +365,32 @@ fn char[] fixed_huff_encode(char[] input, uint[] codes, int[] len, Allocator all
 	}
 
 	return bs.list.to_array(allocator);
+}
+
+<*
+ Returns a tuple of <dist_index, extra_bits>
+*>
+fn Pair{char,char}? huff_dist_lookup(uint off)
+{
+	uint[*] dist_base = {
+		1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97,
+		129, 193, 257, 385, 513, 1025, 1537, 2049, 3073,
+		4097, 6145, 8193, 12289, 16385,
+	};
+	char[*] dist_extra = {
+		0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4,
+		5, 5, 6, 6, 7, 7, 8, 9, 9, 10, 10,
+		11, 11, 12, 12, 13,
+	};
+	assert(dist_base.len == dist_extra.len);
+
+	foreach (char i, b: dist_base)
+	{
+		if (b < off) continue;
+		if (i) i--;
+		return {i, dist_extra[i]};
+	}
+	return NOT_FOUND?;
 }
 
 <*
