@@ -433,7 +433,6 @@ fn void test_huff_tree()
 	uint[] pm_counts = package_merge(freqs, 15, tmem);
 	io::printfn("package-merge counts: %s", pm_counts);
 
-
 	uint[] codes = gen_huff(counts[..]);
 
 	foreach (i, hcode : codes)
@@ -743,72 +742,11 @@ fn void test_package_merge_fn() @test => @pool()
 	assert(counts == {2,2,2,0,3,4,4});
 }
 
-//
-// An idea for LZ77-style compressor:
-//
-// X Y Z A B
-// X Y Z
-//   Y Z A
-//     Z A B
+/*
 
-// 1) fill up queue
-// 2) calculate hash XYZ
-// 3) check if hash value found;
-//     if found -> go to 4.
-//     else emit literal X, pop x and add new byte to queue
-// 4) foreach entry, calculate match_len, return max_match_len
-// 5) repeat steps 2-4 for YZA, ZAB
-// 6) find max_match_len(XYZ, YZA, ZAB)
-//    if max_match_len(XYZ), emit XYZ tuple, move 1 byte
-//    if max_match_len(YZA), emit literal X, move 1 byte, emit YZA tuple, move 1 byte
-//    if max_match_len(ZAB), emit literal X and literal Y, move 2 byte, emit ZAB tuple, move 1 byte
-// 7) terminate loop if input is consumed
-//
-//
-// struct DictEncoder (OutStream)
-// {
-// 	RingBuffer{ char[1<<15] }     window; // Sliding window
-// 	HashMap{ HashKey, HashChain } index;
-// 	Token[]                       tokens;
-// 	RingBuffer{ char[258] }       queue;
-// }
-//
-//
-// fn usz? DictEncoder.write(&self, char[] bytes) @dynamic
-// {
-// 	usz written;
-// 	foreach (c: bytes)
-// 	{
-// 		self.queue.push(c);
-// 		written++;
-// 		if (self.queue.len() == 5)
-// 		{
-// 			HashKey[3] keys;
-// 			foreach (i, &key: keys)
-// 			{
-// 				self.queue.read(i, key.bytes[..]);
-// 			}
-// 			if (try chain = self.index[keys[0]])
-// 			{
-//
-// 			}
-// 			else
-// 			{
-// 				// TODO: emit X literal
-// 				if (try x = self.queue.pop)
-// 				{
-// 					self.window.push(x);
-// 				}
-// 				self.queue.pop();
-// 			}
-// 		}
-// 	}
-// 	if (self.queue.len())
-// 	{
-// 		// TODO: drain queue
-// 	}
-// 	return written;
-// }
+Lempel-Ziv Compression
+
+*/
 
 enum TokenType : inline char
 {
@@ -817,35 +755,42 @@ enum TokenType : inline char
 	MATCH
 }
 
-// struct Token (Printable)
-// {
-// 	TokenType type;
-// 	union
-// 	{
-// 		char      literal;
-// 		ushort[2] lendist; // Length, Distance
-// 	}
-// }
 const ushort MIN_MATCH_LEN   = 3;
-const ushort MAX_MATCH_LEN   = 256;
+const ushort MAX_MATCH_LEN   = 258;
 const ushort MAX_WINDOW_SIZE = 1 << 15;
 const uint   MIN_OFFSET_LEN  = 3;
 
 bitstruct Token (Printable) : uint @bigendian @overlap
 {
 	TokenType type : 0..2;   //  2 bits: 0 = INVALID, 1 = LITERAL, 2 = MATCH, 3 = EOF
-	ushort    len  : 3..10;  //  8 bits: xlength = length - MIN_MATCH_LENGTH
-	uint      off  : 11..31; // 20 bits: xoffset = offset - MIN_OFFSET_SIZE
+	char      len  : 3..10;  //  8 bits: len = length - MIN_MATCH_LENGTH
+	uint      off  : 11..31; // 20 bits: off = offset - MIN_OFFSET_SIZE
 	char      lit  : 24..31; //  8 bits: store literal
 }
+
+fn ushort Token.length(&self) => MIN_MATCH_LEN + (ushort)self.len;
+fn uint Token.offset(&self) => MIN_OFFSET_LEN + self.off;
+
+<*
+ @require length >= MIN_MATCH_LEN
+ @require offset >= MIN_OFFSET_LEN
+*>
+fn Token make_match(ushort length, uint offset)
+{
+	return (Token){
+		.type = MATCH,
+		.len = (char)(length - MIN_MATCH_LEN),
+		.off = offset - MIN_OFFSET_LEN,
+	};
+}
 fn Token make_literal(char literal) => (Token){ .type = LITERAL, .lit = literal };
-fn Token make_match(ushort len, uint off) => (Token){ .type = MATCH, .len = len, .off = off };
+
 fn usz? Token.to_format(&self, Formatter *f) @dynamic
 {
 	switch (self.type)
 	{
 		case LITERAL: return f.printf("LITERAL<%c>", self.lit);
-		case MATCH:   return f.printf("MATCH<%d:%d>", self.off, self.len);
+		case MATCH:   return f.printf("MATCH<%d:%d>", self.offset(), self.length());
 		default: unreachable("invalid token type");
 	}
 }
@@ -866,14 +811,14 @@ alias MatchPair = Pair{uint, ushort};
  @param [&inout] chain : "Chained hash list storing positions in s"
  @param s              : "Input data string"
  @param i              : "Current index in s"
- @param window_size    : "Sliding window size"
 *>
-fn MatchPair find_max_match(HashChain *chain, String s, usz i, ushort window_size) @private @inline
+fn MatchPair find_max_match(HashChain *chain, String s, usz i) @private @inline
 {
 	ushort max_match_len, len;
-	uint offset;
+	uint max_match_off, offset;
 
 	max_match_len = 0;
+	max_match_off = 0;
 
 	linkedlist::Node{isz} *node, temp;
 	node = chain._first;
@@ -883,7 +828,7 @@ fn MatchPair find_max_match(HashChain *chain, String s, usz i, ushort window_siz
 		assert(i >= hash_pos);
 
 		offset = (uint)(i - hash_pos);
-		if (offset > window_size)
+		if (offset > MAX_WINDOW_SIZE)
 		{
 			// Remove this node from the hash chain.
 			temp = node;
@@ -894,17 +839,25 @@ fn MatchPair find_max_match(HashChain *chain, String s, usz i, ushort window_siz
 
 		// Find max match length.
 		len = 3;
-		while ((i + len) < s.len && s[hash_pos+len] == s[i+len]) len++;
+		while ((i + len) < s.len && s[hash_pos+len] == s[i+len])
+		{
+			len++;
+		}
 
-		if (len > max_match_len) max_match_len = len;
+		if (len > max_match_len ||
+			(len == max_match_len && offset < max_match_off))
+		{
+			max_match_len = len;
+			max_match_off = offset;
+		}
 
 		node = node.next;
 	}
 
-	return {offset, max_match_len};
+	return {max_match_off, (max_match_len > MAX_MATCH_LEN) ? MAX_MATCH_LEN : max_match_len};
 }
 
-fn Token[] lz77_tokenize(Allocator allocator, String s, ushort window_size = MAX_WINDOW_SIZE) => @pool()
+fn Token[] lz77_tokenize(Allocator allocator, String s) => @pool()
 {
 	usz i;
 	uint offset;
@@ -937,7 +890,7 @@ fn Token[] lz77_tokenize(Allocator allocator, String s, ushort window_size = MAX
 
 		// We have a hit: Find largest match in chain.
 		HashChain *chain = hash.get_ref(key)!!;
-		match = find_max_match(chain, s, i, window_size);
+		match = find_max_match(chain, s, i);
 
 		// Save index in hash chain.
 		chain.push_front(i);
@@ -946,9 +899,10 @@ fn Token[] lz77_tokenize(Allocator allocator, String s, ushort window_size = MAX
 		// and go to next iteration.
 		if (i + 3 + 1 < s.len)
 		{
+			// "Lazy Matching".
 			if (try alt_chain = hash.get_ref({.key = s[i+1:3]}))
 			{
-				alternative = find_max_match(alt_chain, s, i+1, window_size);
+				alternative = find_max_match(alt_chain, s, i+1);
 				if (alternative.second > match.second) match = {};
 			}
 		}
@@ -989,8 +943,8 @@ fn char[] lz77_construct(Allocator allocator, Token[] tokens) => @pool()
 			case LITERAL:
 				buf.append_char(token.lit);
 			case MATCH:
-				usz start = buf.len() - token.off;
-				usz end   = start + token.len;
+				usz start = buf.len() - token.offset();
+				usz end   = start + token.length();
 				for (usz i = start; i < end; i++)
 				{
 					buf.append_char(buf[i]);
@@ -1007,7 +961,7 @@ fn void test_lz77()
 {
 	// String s = "hello world world hello";
 	String s = "aaa aaaa aaaa";
-	Token[] tokens = lz77_tokenize(tmem, s, 32);
+	Token[] tokens = lz77_tokenize(tmem, s);
 
 	io::printfn("%s", tokens);
 
