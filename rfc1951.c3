@@ -852,82 +852,78 @@ fn usz? Token.to_format(&self, Formatter *f) @dynamic
 
 union HashKey (Printable)
 {
-	char[3] bytes;
+	char[3] key;
 	uint    h;
 }
 fn uint HashKey.hash(&self) => self.h;
 fn bool HashKey.equals(&self, HashKey other) => self.h == other.h;
-fn usz? HashKey.to_format(&self, Formatter *f) @dynamic => f.printf("%s", (String)self.bytes[..]);
+fn usz? HashKey.to_format(&self, Formatter *f) @dynamic => f.printf("%s", (String)self.key[..]);
 
 alias HashChain = LinkedList{ isz };
+alias MatchPair = Pair{uint, ushort};
+
+<*
+ @param [&inout] chain : "Chained hash list storing positions in s"
+ @param s              : "Input data string"
+ @param i              : "Current index in s"
+ @param window_size    : "Sliding window size"
+*>
+fn MatchPair find_max_match(HashChain *chain, String s, usz i, ushort window_size) @private @inline
+{
+	ushort max_match_len, len;
+	uint offset;
+
+	max_match_len = 0;
+
+	linkedlist::Node{isz} *node, temp;
+	node = chain._first;
+	while (node != null)
+	{
+		isz hash_pos = node.value;
+		assert(i >= hash_pos);
+
+		offset = (uint)(i - hash_pos);
+		if (offset > window_size)
+		{
+			// Remove this node from the hash chain.
+			temp = node;
+			node = node.next;
+			chain.unlink(temp);
+			continue;
+		}
+
+		// Find max match length.
+		len = 3;
+		while ((i + len) < s.len && s[hash_pos+len] == s[i+len]) len++;
+
+		if (len > max_match_len) max_match_len = len;
+
+		node = node.next;
+	}
+
+	return {offset, max_match_len};
+}
 
 fn Token[] lz77_tokenize(Allocator allocator, String s, ushort window_size = MAX_WINDOW_SIZE) => @pool()
 {
 	usz i;
-	ushort len, max_match_len;
 	uint offset;
+	ushort len;
+
+	MatchPair match, alternative;
+	HashMap{ HashKey, HashChain } hash;
+	hash.tinit();
 
 	List{Token} tokens;
 	tokens.tinit();
 
-	// Prepare hash and process inS                                                        SSSSSSSSSSSSSSSDFDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDDD
-	HashMap{ HashKey, HashChain } hash;
-	hash.tinit();
+	// Prepare hash and process input.
 	for (i = 0; i < s.len - 2; i++)
 	{
-		HashKey key = { .bytes = s[i:3] };
-		io::printfn("hash key %s at %d", key, i);
-
-		if (try chain = hash.get_ref(key))
+		HashKey key = {.key = s[i:3]};
+		if (!hash.has_key(key))
 		{
-			// We have a match: Find max_match_len in chain
-			max_match_len = 0;
-
-			// TODO: iterate directly over nodes to be more performant
-			foreach (index, hash_pos: chain)
-			{
-				offset = (uint)(i - hash_pos);
-				if (offset > window_size)
-				{
-					// Remove this node from the hash chain.
-					chain.remove_at(index);
-					continue;
-				}
-
-				// Find max match length.
-				len = 3;
-				while (i + len < s.len && s[hash_pos+len] == s[i+len])
-				{
-					len++;
-				}
-				if (len > max_match_len)
-				{
-					max_match_len = len;
-				}
-			}
-
-			if (max_match_len > 0 && offset > 0)
-			{
-				// Emit match token.
-				tokens.push(make_match(max_match_len, offset));
-				i += max_match_len;
-
-				// Adjust for overlap
-				usz overlap = (usz)max_match_len - offset;
-				if (overlap > 0) i -= overlap;
-			}
-			else
-			{
-				// No match: it's a literal!
-				// Emit literal token.
-				tokens.push(make_literal(s[i]));
-			}
-
-			chain.push_front(i);
-		}
-		else
-		{
-			// No match: it's a literal!
+			// No hit: it's a literal!
 			// Emit literal token.
 			tokens.push(make_literal(s[i]));
 
@@ -936,16 +932,46 @@ fn Token[] lz77_tokenize(Allocator allocator, String s, ushort window_size = MAX
 			chain.tinit();
 			chain.push_front(i);
 			hash[key] = chain;
+			continue;
+		}
+
+		// We have a hit: Find largest match in chain.
+		HashChain *chain = hash.get_ref(key)!!;
+		match = find_max_match(chain, s, i, window_size);
+
+		// Save index in hash chain.
+		chain.push_front(i);
+
+		// If next hash has a longer match, then emit current literal
+		// and go to next iteration.
+		if (i + 3 + 1 < s.len)
+		{
+			if (try alt_chain = hash.get_ref({.key = s[i+1:3]}))
+			{
+				alternative = find_max_match(alt_chain, s, i+1, window_size);
+				if (alternative.second > match.second) match = {};
+			}
+		}
+
+		offset = match.first;
+		len    = match.second;
+		if (len > 0 && offset > 0)
+		{
+			// Emit match token.
+			tokens.push(make_match(len, offset));
+			i += len - 1L; // -1 because of increment in for-loop
+		}
+		else
+		{
+			// Emit literal token.
+			tokens.push(make_literal(s[i]));
 		}
 	}
 
-	io::printfn("hash index: %s", hash);
-
-	// Emit remaing literal tokens.
-	for (; i < s.len; i++)
+	// Emit remaining literal tokens.
+	while (i < s.len)
 	{
-		// Emit literal token
-		tokens.push(make_literal(s[i]));
+		tokens.push(make_literal(s[i++]));
 	}
 
 	return tokens.to_array(allocator);
@@ -979,10 +1005,14 @@ fn char[] lz77_construct(Allocator allocator, Token[] tokens) => @pool()
 
 fn void test_lz77()
 {
-	String s = "hello world world hello";
+	// String s = "hello world world hello";
+	String s = "aaa aaaa aaaa";
 	Token[] tokens = lz77_tokenize(tmem, s, 32);
+
 	io::printfn("%s", tokens);
 
-	io::printfn("construct: '%s'", (String)lz77_construct(tmem, tokens));
+	String r = (String)lz77_construct(tmem, tokens);
+	io::printfn("construct: '%s'", r);
+	assert(s == r, "want: '%s', got: '%s'", s, r);
 }
 
