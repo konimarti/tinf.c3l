@@ -123,8 +123,8 @@ fn void main() => @pool()
 
 	// test_huff_tree();
 	// test_package_merge();
-	test_lz77();
-	// no_compression();
+	// test_lz77();
+	uncompressed_block();
 	fixed_huff();
 	// dynamic_huff();
 }
@@ -136,52 +136,54 @@ fn void main() => @pool()
 // }
 
 import std::math;
-fn void no_compression() => @pool()
+fn void uncompressed_block() => @pool()
 {
 	io::printn("-- no compression --");
 	// char[] input = "hello world";
-	char[] input = "12";
+	// char[] input = "12";
 
 	// char[1024] input;
-	// foreach (i, &e : input) *e = (char)(i % 255);
+	char[] input = mem::temp_array(char, MAX_BLOCK_SIZE + 8);
+	foreach (i, &e : input) *e = (char)(i % 255);
 
-	char[] encoded = nocomp_encode(input[..], tmem);
-	io::printfn("%s", hex::tencode(encoded));
+	char[] encoded = uncompressed_block_encode(input[..], tmem);
+	io::printfn("%s", hex::encode(mem, encoded));
 
 	verify(encoded, input[..], "no_comp");
 }
 
-<*
- TODO: Enforce max block size of 65'535 as defined in the RFC.
-*>
-fn char[] nocomp_encode(char[] input, Allocator allocator) => @pool()
+const uint MAX_BLOCK_SIZE = 65_535;
+fn char[] uncompressed_block_encode(char[] input, Allocator allocator) => @pool()
 {
 	DynamicBitList bs;
 	bs.tinit();
 
-	// Set Block header
-	// Push BFINAL (0b1) and BTYPE (0b00) as 0x001 [read from right to left]
-	bs.push(0b001, 8);
+	bool final;
+	usz offset, remaining;
+	uint block_len;
 
-	// Encode len (deflate rfc packes data elements into bytes as lsb) If
-	// input.len does not fit an ushort, we have to create multiple blocks
-	ushort len = (ushort)input.len;
-	bs.push((char)len, 8);
-	bs.push((char)(len>>8), 8);
-
-	ushort nlen = ~len;
-	bs.push((char)nlen, 8);
-	bs.push((char)(nlen>>8), 8);
-
-	// Encode data
-	foreach(i, c: input)
+	offset = 0;
+	while (offset < input.len)
 	{
-		bs.push(c, 8);
-	}
+		remaining = input.len - offset;
+		block_len = remaining > MAX_BLOCK_SIZE ? MAX_BLOCK_SIZE : (uint)remaining;
+		final = offset + block_len >= input.len;
 
-	foreach (i, b : bs.list)
-	{
-		io::printfn("bytes %2d: 0x%02x 0b%08b", i, b, b);
+		// Set Block header.
+		// Push BFINAL (0b1) and BTYPE (0b00) as 0x001 [read from right to left]
+		bs.push(final ? 1 : 0, 8);
+
+		// Encode block length.
+		bs.push(block_len, 16);
+		bs.push(~block_len, 16);
+
+		// Encode data
+		for (usz i = 0; i < block_len; i++)
+		{
+			bs.push(input[offset+i], 8);
+		}
+
+		offset += block_len;
 	}
 
 	return bs.list.to_array(allocator);
