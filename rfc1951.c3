@@ -37,7 +37,7 @@ macro BitState get_bit_state(uint b, isz pos)
  TODO: Implement a bit reversal when generating the huff code; then we can
  avoid lsb
 
- TODO: Also, push entire bits in one go instead of individual bits
+ TODO: Also, push entire bytes in one go instead of individual bits
 
  @param b        : "Bits to be pushed"
  @param num_bits : "Number of bits to push"
@@ -52,7 +52,7 @@ fn void DynamicBitList.push(&self, uint b, usz num_bits, bool lsb = true)
 	end   = num_bits - 1;
 	if (lsb)
 	{
-		for (isz i = start; i <= end; i+= lsb ? 1 : -1)
+		for (isz i = start; i <= end; i++)
 		{
 			self.push_bit(get_bit_state(b, i));
 		}
@@ -332,25 +332,31 @@ fn char[] fixed_huff_encode(char[] input, uint[] codes, int[] len,
 				bs.push(codes[c], len[c], false);
 
 			case MATCH:
-				// TODO: only implemented for lengths 3 - 10
-				assert(token.len<10);
-				io::printfn("len index: %d", 257+token.len);
-				bs.push(codes[257+token.len], len[257+token.len], false);
-
-				// TODO: this is hard-coded for the given example
-				bs.push(dist_codes[4], dist_len[4], false);
-				bs.push(1, 1, false);
-
-				// io::printfn("offset: %d", token.offset());
-				if (try tuple = huff_dist_lookup(token.offset()))
+				// Write length code.
+				if (try idx = huff_index_lookup(&len_base, token.length()))
 				{
-					// io::printfn("tuple<dist_index, extra_bit> = %s", tuple );
-					// // Write distance code.
-					// bs.push(dist_codes[tuple.first], len[tuple.first], false);
-					// // Write extra bit.
-					// if (tuple.second) bs.push(token.offset()-tuple.first, tuple.second, false);
+					// Write distance code.
+					bs.push(codes[257+idx], len[257+idx], false);
+
+					// Write extra bit.
+					if (len_extra[idx])
+					{
+						bs.push(token.length()-len_base[idx], len_extra[idx], false);
+					}
 				}
-				io::printfn("MATCH ENCODED");
+
+				// Write distance code.
+				if (try idx = huff_index_lookup(&dist_base, token.offset()))
+				{
+					// Write distance code.
+					bs.push(dist_codes[idx], dist_len[idx], false);
+
+					// Write extra bit.
+					if (dist_extra[idx])
+					{
+						bs.push(token.offset()-dist_base[idx], dist_extra[idx], false);
+					}
+				}
 
 			default: unreachable("invalid token type");
 		}
@@ -367,28 +373,45 @@ fn char[] fixed_huff_encode(char[] input, uint[] codes, int[] len,
 	return bs.list.to_array(allocator);
 }
 
-<*
- Returns a tuple of <dist_index, extra_bits>
-*>
-fn Pair{char,char}? huff_dist_lookup(uint off)
-{
-	uint[*] dist_base = {
-		1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97,
-		129, 193, 257, 385, 513, 1025, 1537, 2049, 3073,
-		4097, 6145, 8193, 12289, 16385,
-	};
-	char[*] dist_extra = {
-		0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4,
-		5, 5, 6, 6, 7, 7, 8, 9, 9, 10, 10,
-		11, 11, 12, 12, 13,
-	};
-	assert(dist_base.len == dist_extra.len);
 
-	foreach (char i, b: dist_base)
+
+<* RFC Section 3.2.5 *>
+uint[*] len_base = {
+	3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 15, 17,
+	19, 23, 27, 31, 35, 43, 51, 59, 67, 83,
+	99, 115, 131, 163, 195, 227, 258,
+};
+
+<* RFC Section 3.2.5 *>
+char[*] len_extra = {
+	0, 0, 0, 0, 0, 0, 0, 0, 1, 1, 1, 1,
+	2, 2, 2, 2, 3, 3, 3, 3, 4, 4, 4, 4,
+	5, 5, 5, 5, 0,
+};
+
+<* RFC Section 3.2.5 *>
+uint[*] dist_base = {
+	1, 2, 3, 4, 5, 7, 9, 13, 17, 25, 33, 49, 65, 97,
+	129, 193, 257, 385, 513, 769, 1025, 1537, 2049, 3073,
+	4097, 6145, 8193, 12289, 16385, 24577,
+	32768 /* range end marker */,
+};
+
+<* RFC Section 3.2.5 *>
+char[*] dist_extra = {
+	0, 0, 0, 0, 1, 1, 2, 2, 3, 3, 4, 4,
+	5, 5, 6, 6, 7, 7, 8, 8, 9, 9, 10, 10,
+	11, 11, 12, 12, 13, 13,
+};
+
+<*
+ Returns the index for the given base values.
+*>
+fn usz? huff_index_lookup(uint[] base, uint off)
+{
+	for (usz i = 0; i < base.len - 1; i++)
 	{
-		if (b < off) continue;
-		if (i) i--;
-		return {i, dist_extra[i]};
+		if (off < base[i+1]) return i;
 	}
 	return NOT_FOUND?;
 }
