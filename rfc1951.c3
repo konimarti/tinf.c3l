@@ -1,7 +1,7 @@
 module rfc;
 import std::io, std::encoding, std::collections, tinf;
 
-struct DynamicBitList
+struct DynamicBitList (Printable)
 {
 	List{char} list;
 	usz pos;
@@ -10,6 +10,10 @@ struct DynamicBitList
 fn void DynamicBitList.init(&self, Allocator allocator) => self.list.init(allocator);
 fn void DynamicBitList.tinit(&self) => self.init(tmem);
 fn void DynamicBitList.free(&self) => self.list.free();
+fn usz? DynamicBitList.to_format(&self, Formatter *f) @dynamic => @pool()
+{
+	return f.printf("%s", hex::tencode(self.list.array_view()));
+}
 
 enum BitState { UNSET, SET }
 fn void DynamicBitList.push_bit(&self, BitState bit)
@@ -39,38 +43,91 @@ macro BitState get_bit_state(uint b, isz pos)
 
  TODO: Also, push entire bytes in one go instead of individual bits
 
- @param b        : "Bits to be pushed"
+ @param bits     : "Bits to be pushed"
  @param num_bits : "Number of bits to push"
- @param lsb      : "Order from which side to start pushing bits"
  @require num_bits > 0   : "Number of bits must be at least 1"
  @require num_bits <= 32 : "Number of bits can not be larger than 32"
 *>
-fn void DynamicBitList.push(&self, uint b, usz num_bits, bool lsb = true)
+fn void DynamicBitList.push(&self, uint bits, isz num_bits)
 {
-	isz start, end;
-	start = 0;
-	end   = num_bits - 1;
-	if (lsb)
+	// Simple but slow:
+	// for (isz i = 0; i < num_bits; i++)
+	// {
+	// 	self.push_bit(get_bit_state(bits, i));
+	// }
+
+	// A bit more complex, but ~4x faster:
+	isz consumed, offset, n;
+
+	bits &= (1U << num_bits) - 1;
+
+	consumed = 0;
+	offset = self.pos % 8;
+	if (offset > 0)
 	{
-		for (isz i = start; i <= end; i++)
-		{
-			self.push_bit(get_bit_state(b, i));
-		}
+		n = 8 - offset;
+		if (n > num_bits) n = num_bits;
+		self.list[^1] |= (char)((bits<<offset) & 0xff);
+		bits >>= n;
+		consumed += n;
+		num_bits -= n;
 	}
-	else
+
+	while (num_bits > 0)
 	{
-		for (isz i = end; i >= start; i--)
-		{
-			self.push_bit(get_bit_state(b, i));
-		}
+		self.list.push((char)(bits & 0xFF));
+		n = (num_bits > 8) ? 8 : num_bits;
+		bits >>= n;
+		consumed += n;
+		num_bits -= n;
+	}
+
+	self.pos += consumed;
+}
+
+fn void test_bit_push_bench() @benchmark
+{
+	DynamicBitList bs;
+	bs.init(mem);
+	defer bs.free();
+
+	for (uint i = 0; i < (1<<9); i++)
+	{
+		bs.push(0b1010011, 7);
 	}
 }
 
-fn void main()
+
+import std::bits;
+<*
+ @require len < 16
+*>
+fn ushort reverse_bits(ushort b, int len) @inline
 {
+	ushort v = b << (16 - (char)len);
+	ushort r = bits::reverse(v);
+	return r;
+}
+
+fn void main() => @pool()
+{
+	DynamicBitList bs;
+	bs.tinit();
+
+	bs.push(0b101, 3);
+	io::printfn("%s", bs);
+
+	bs.push(0b1001001, 7);
+	io::printfn("%s", bs);
+
+	bs.push(0b101, 3);
+	io::printfn("%s", bs);
+
+	foreach (i, b: bs.list) io::printfn("%d\t%08b", i, b);
+
 	// test_huff_tree();
 	// test_package_merge();
-	test_lz77();
+	// test_lz77();
 	// no_compression();
 	fixed_huff();
 	// dynamic_huff();
@@ -113,17 +170,17 @@ fn char[] nocomp_encode(char[] input, Allocator allocator) => @pool()
 	// Encode len (deflate rfc packes data elements into bytes as lsb) If
 	// input.len does not fit an ushort, we have to create multiple blocks
 	ushort len = (ushort)input.len;
-	bs.push((char)len, 8, lsb: true);
-	bs.push((char)(len>>8), 8, lsb: true);
+	bs.push((char)len, 8);
+	bs.push((char)(len>>8), 8);
 
 	ushort nlen = ~len;
-	bs.push((char)nlen, 8, lsb: true);
-	bs.push((char)(nlen>>8), 8, lsb: true);
+	bs.push((char)nlen, 8);
+	bs.push((char)(nlen>>8), 8);
 
 	// Encode data
 	foreach(i, c: input)
 	{
-		bs.push(c, 8, lsb: true);
+		bs.push(c, 8);
 	}
 
 	foreach (i, b : bs.list)
@@ -146,19 +203,19 @@ fn void dynamic_huff() => @pool()
 	foreach (c: s) freqs[c]++;
 	freqs[256]++; // don't forget end of block marker
 
-	uint[] bit_len = package_merge(freqs[..], 15, tmem);
-	// uint[] bit_len = huff_bit_counts(freqs[..], 15);
+	char[] bit_len = package_merge(freqs[..], 15, tmem);
+	// char[] bit_len = huff_bit_counts(freqs[..], 15);
 
 	// Generate the fixed Huffman codes
-	uint[] huff_codes = gen_huff(bit_len[..]);
+	ushort[] huff_codes = gen_huff(bit_len[..]);
 
 	// Distance codes bit_len
-	int[*] dist_len = {
+	char[*] dist_len = {
 		[0] = 0, // one distance code with zero bits -> no distance code used
 	};
 
 	// Generate the distance codes
-	uint[] dist_codes = gen_huff(dist_len[..]);
+	ushort[] dist_codes = gen_huff(dist_len[..]);
 
 	// Encode string
 	char[] encoded = dynamic_huff_encode(s,
@@ -170,12 +227,12 @@ fn void dynamic_huff() => @pool()
 	verify(encoded, s, "dynamic_huff");
 }
 
-fn char[] dynamic_huff_encode(char[] input, uint[] codes, int[] len,
-					uint[]dist_codes, int[] dist_len,
+fn char[] dynamic_huff_encode(char[] input, ushort[] codes, char[] len,
+					ushort[]dist_codes, char[] dist_len,
 			Allocator allocator) => @pool()
 {
 	// Create code-length Huff codes
-	uint[] hc_order = {
+	char[] hc_order = {
 		16, 17, 18,  0,  8,
 		 7,  9,  6, 10,  5,
 		11,  4, 12,  3, 13,
@@ -183,7 +240,7 @@ fn char[] dynamic_huff_encode(char[] input, uint[] codes, int[] len,
 	 };
 
 	// Record bitlen frequencies
-	int[*] freqs = { [0..18] = 0 };
+	uint[*] freqs = { [0..18] = 0 };
 	foreach (l: len)      freqs[l]++;
 	foreach (l: dist_len) freqs[l]++;
 
@@ -195,12 +252,11 @@ fn char[] dynamic_huff_encode(char[] input, uint[] codes, int[] len,
 
 	io::printfn("freqs       : %s", freqs);
 	// Create code-length Huff codes
-	uint[] hc_len = package_merge(freqs[..], 5, tmem);
+	char[] hc_len = package_merge(freqs[..], 5, tmem);
 	io::printfn("counts (pm)  : %s", hc_len);
-	// FIXME: here, the huff_tree bit count do not work
 	// hc_len = huff_bit_counts(freqs[..], 5);
 	// io::printfn("counts (tree): %s", hc_len);
-	uint[] hc_codes = gen_huff(hc_len);
+	ushort[] hc_codes = gen_huff(hc_len);
 
 	foreach (i, code : hc_codes)
 	{
@@ -215,42 +271,42 @@ fn char[] dynamic_huff_encode(char[] input, uint[] codes, int[] len,
 	bs.push(0b101, 3);
 
 	// Push 5 bits HLIT (# of literal/length codes - 257)
-	bs.push(codes.len-257, 5, true);
+	bs.push(codes.len-257, 5);
 
 	// Push 5 bits HDIST (# of distance codes - 1)
-	bs.push(dist_codes.len-1, 5, true);
+	bs.push(dist_codes.len-1, 5);
 
 	// Push 4 bits HCLEN (# of code length codes - 4)
-	bs.push(hc_codes.len-4, 4, true);
+	bs.push(hc_codes.len-4, 4);
 
 	// Assume for now that we use all 19 codes with a code bit length of 3
 	// bits; ensure that they are written in the expected order
 	for (usz i = 0; i < 19; i++)
 	{
 		io::printfn("having: %d -> %d -> %d", i, hc_order[i], hc_len[i]);
-		bs.push(hc_len[hc_order[i]], 3, true);
+		bs.push(hc_len[hc_order[i]], 3);
 	}
 
 	// Now save the literal/length tree, hc-encoded
 	foreach(l: len)
 	{
-		bs.push(hc_codes[l], hc_len[l], false);
+		bs.push(hc_codes[l], hc_len[l]);
 	}
 
 	// Now save the distance/tree, hc-encoded
 	foreach(l: dist_len)
 	{
-		bs.push(hc_codes[l], hc_len[l], false);
+		bs.push(hc_codes[l], hc_len[l]);
 	}
 
 	// And finally the compressed data
 	foreach(c: input)
 	{
-		bs.push(codes[c], len[c], false);
+		bs.push(codes[c], len[c]);
 	}
 
 	// Add end of block code 256
-	bs.push(codes[256], len[256], false);
+	bs.push(codes[256], len[256]);
 
 	return bs.list.to_array(allocator);
 }
@@ -260,7 +316,7 @@ fn void fixed_huff() => @pool()
 	io::printn("-- fixed huffman encoding --");
 
 	// Fixed Huffman codes bit_len
-	int[*] bit_len = {
+	char[*] bit_len = {
 		[  0..143] = 8,
 		[144..255] = 9,
 		[256..279] = 7,
@@ -268,15 +324,15 @@ fn void fixed_huff() => @pool()
 	};
 
 	// Generate the fixed Huffman codes
-	uint[] huff_codes = gen_huff(bit_len[..]);
+	ushort[] huff_codes = gen_huff(bit_len[..]);
 
 	// Distance codes dist_len
-	int[*] dist_len = {
+	char[*] dist_len = {
 		[  0..32] = 5,
 	};
 
 	// Generate the distance codes
-	uint[] dist_codes = gen_huff(dist_len[..]);
+	ushort[] dist_codes = gen_huff(dist_len[..]);
 
 	// Input string to be deflated
 	char[] s = "hello world wor";
@@ -295,7 +351,7 @@ fn void verify(char[] encoded, char[] input, String test_name)
 	char[1024] output;
 	if (catch err = inflate::uncompress(output[..], encoded))
 	{
-		io::printfn("failed in: %s", test_name);
+		io::printfn("rfc: Failed in: %s", test_name);
 		abort();
 	}
 	// io::printfn("uncompressed: '%s'", (String)output[..]);
@@ -311,8 +367,8 @@ fn void verify(char[] encoded, char[] input, String test_name)
  Encode char[] with the provided Huffman codes and bit lengths.
  @require codes.len == len.len
 *>
-fn char[] fixed_huff_encode(char[] input, uint[] codes, int[] len,
-	uint[] dist_codes, int[] dist_len, Allocator allocator) => @pool()
+fn char[] fixed_huff_encode(char[] input, ushort[] codes, char[] len,
+	ushort[] dist_codes, char[] dist_len, Allocator allocator) => @pool()
 {
 	DynamicBitList bs;
 	bs.tinit();
@@ -329,19 +385,19 @@ fn char[] fixed_huff_encode(char[] input, uint[] codes, int[] len,
 		{
 			case LITERAL:
 				char c = token.lit;
-				bs.push(codes[c], len[c], false);
+				bs.push(codes[c], len[c]);
 
 			case MATCH:
 				// Write length code.
 				if (try idx = huff_index_lookup(&len_base, token.length()))
 				{
 					// Write distance code.
-					bs.push(codes[257+idx], len[257+idx], false);
+					bs.push(codes[257+idx], len[257+idx]);
 
 					// Write extra bit.
 					if (len_extra[idx])
 					{
-						bs.push(token.length()-len_base[idx], len_extra[idx], false);
+						bs.push(token.length()-len_base[idx], len_extra[idx]);
 					}
 				}
 
@@ -349,12 +405,12 @@ fn char[] fixed_huff_encode(char[] input, uint[] codes, int[] len,
 				if (try idx = huff_index_lookup(&dist_base, token.offset()))
 				{
 					// Write distance code.
-					bs.push(dist_codes[idx], dist_len[idx], false);
+					bs.push(dist_codes[idx], dist_len[idx]);
 
 					// Write extra bit.
 					if (dist_extra[idx])
 					{
-						bs.push(token.offset()-dist_base[idx], dist_extra[idx], false);
+						bs.push(token.offset()-dist_base[idx], dist_extra[idx]);
 					}
 				}
 
@@ -363,7 +419,7 @@ fn char[] fixed_huff_encode(char[] input, uint[] codes, int[] len,
 	}
 
 	// Add end of block code 256
-	bs.push(codes[256], len[256], false);
+	bs.push(codes[256], len[256]);
 
 	foreach (i, b : bs.list)
 	{
@@ -421,9 +477,9 @@ fn usz? huff_index_lookup(uint[] base, uint off)
  require bit_len.len == 288 || bit_len.len == 19: "Code bit_len array must contain exactly 288 or 19 elements"
 
  @param bit_len : "Array with bit bit_len of Huffman codes"
- @return "Huffman codes"
+ @return "Huffman codes (bits reversed)"
 *>
-fn uint[] gen_huff(int[] bit_len)
+fn ushort[] gen_huff(char[] bit_len)
 {
 	// Toy model in RFC:
 	// int[*] bit_len = { 3, 3, 3, 3, 3, 2, 4, 4 };
@@ -432,7 +488,7 @@ fn uint[] gen_huff(int[] bit_len)
         // 1)  Count the number of codes for each code length.  Let
         //     bl_count[N] be the number of codes of length N, N >= 1.
 
-	HashMap{int, int} bl_count;
+	HashMap{char, ushort} bl_count;
 	bl_count.tinit();
 	foreach (len: bit_len) bl_count[len] += 1;
 	// io::printfn("bl_count[N]: %s", bl_count);
@@ -442,13 +498,13 @@ fn uint[] gen_huff(int[] bit_len)
 
 	const MAX_BITS = 32; // ??
 
-	List{int} next_code;
+	List{ushort} next_code;
 	next_code.tinit();
 	next_code.push(0); // Move index to 1
 
-	int code = 0;
+	ushort code = 0;
 	bl_count[0] = 0;
-	for (int bits = 1; bits <= MAX_BITS; bits++)
+	for (char bits = 1; bits <= MAX_BITS; bits++)
 	{
 	        code = (code + bl_count[bits-1] ?? 0) << 1;
 	        next_code.push(code);
@@ -461,12 +517,12 @@ fn uint[] gen_huff(int[] bit_len)
         //     (which have a bit length of zero) must not be assigned a
         //     value.
 
-	uint[] codes = mem::temp_array(uint, bit_len.len);
+	ushort[] codes = mem::temp_array(ushort, bit_len.len);
 	foreach (i, len: bit_len)
 	{
 		if (len == 0) continue;
 		// io::printfn("%4d\t%d\t%0*b", i, len, len, next_code[len]);
-		codes[i] = next_code[len];
+		codes[i] = reverse_bits(next_code[len], len);
 		next_code[len]++;
 	}
 	return codes;
@@ -504,13 +560,13 @@ fn uint[] gen_huff(int[] bit_len)
 fn void test_huff_tree()
 {
 	uint[] freqs = {4,2,0,3,2,0};
-	uint[] counts = huff_bit_counts(freqs, 15);
+	char[] counts = huff_bit_counts(freqs, 15);
 	io::printfn("huff_tree_bit counts: %s", counts);
 
-	uint[] pm_counts = package_merge(freqs, 15, tmem);
+	char[] pm_counts = package_merge(freqs, 15, tmem);
 	io::printfn("package-merge counts: %s", pm_counts);
 
-	uint[] codes = gen_huff(counts[..]);
+	ushort[] codes = gen_huff(counts[..]);
 
 	foreach (i, hcode : codes)
 	{
@@ -543,7 +599,7 @@ fn Node* make_node(NodeType type, uint freq, usz pos, Allocator allocator = tmem
 <*
  @require max_bits >= 2 && max_bits < 16
 *>
-fn uint[] huff_bit_counts(uint[] freqs, uint max_bits)
+fn char[] huff_bit_counts(uint[] freqs, char max_bits)
 {
 	PriorityQueue{Node*} heap;
 	heap.tinit();
@@ -572,15 +628,15 @@ fn uint[] huff_bit_counts(uint[] freqs, uint max_bits)
 		heap.push(new_node);
 	}
 
-	uint[] counts = allocator::new_array(tmem, uint, freqs.len);
+	char[] counts = allocator::new_array(tmem, char, freqs.len);
 
 	// heap.first() points to root node
-	huff_tree_traverse(heap.first()!!, counts, 0, freqs.len-1);
+	huff_tree_traverse(heap.first()!!, counts, 0);
 
 	// io::printfn("huff_bit_counts: counts=%s", counts);
 
 	// Remove depth from dummy node
-	uint off = (uint)(math::log2(max_bits - 1)+0.5);
+	char off = (char)(math::log2(max_bits - 1)+0.5);
 	foreach (&count: counts) if (*count > off) *count -= off;
 
 	// io::printfn("huff_bit_counts: counts=%s", counts);
@@ -588,7 +644,7 @@ fn uint[] huff_bit_counts(uint[] freqs, uint max_bits)
 	return counts;
 }
 
-fn void huff_tree_traverse(Node *n, uint[] counts, uint depth, uint max_depth)
+fn void huff_tree_traverse(Node *n, char[] counts, char depth)
 {
 	if (n.type == LEAF)
 	{
@@ -598,18 +654,18 @@ fn void huff_tree_traverse(Node *n, uint[] counts, uint depth, uint max_depth)
 	}
 
 	// Recurse through dummies and internal
-	if (n.left != null)  huff_tree_traverse(n.left, counts, depth+1, max_depth);
-	if (n.right != null) huff_tree_traverse(n.right, counts, depth+1, max_depth);
+	if (n.left != null)  huff_tree_traverse(n.left, counts, depth+1);
+	if (n.right != null) huff_tree_traverse(n.right, counts, depth+1);
 }
 
 fn void test_package_merge()
 {
 	uint[] freqs = {4,4,4,0,3,2,1};
-	uint[] counts = package_merge(freqs, 5, tmem);
+	char[] counts = package_merge(freqs, 5, tmem);
 	assert(freqs.len == counts.len);
 	io::printfn("counts: %s", counts);
 
-	uint[] codes = gen_huff(counts);
+	ushort[] codes = gen_huff(counts);
 	foreach (i, code : codes)
 	{
 		io::printfn("%d\t%08b", freqs[i], code);
@@ -633,7 +689,7 @@ fn usz? Mapping.to_format(&self, Formatter *f) @dynamic => f.printf("(%d)", self
  Based on the C implementation from Stephan Brumme (2021):
  https://create.stephan-brumme.com/length-limited-prefix-codes/
 *>
-fn uint[] package_merge(uint[] freqs, uint max_bits, Allocator allocator) => @pool()
+fn char[] package_merge(uint[] freqs, uint max_bits, Allocator allocator) => @pool()
 {
 	List{Mapping} mappings;
 	mappings.tinit();
@@ -658,9 +714,9 @@ fn uint[] package_merge(uint[] freqs, uint max_bits, Allocator allocator) => @po
 	// One or two codes are encoded with a single bit
 	if (num_codes <= 2)
 	{
-		hist[..] = 0;
-		hist[0] = 1;
-		return hist;
+		char[] len = mem::temp_array(char, num_codes);
+		len[0] = 1;
+		return len;
 	}
 
 	// Require two scratch buffers to process iterations and some bitmasks
@@ -802,10 +858,10 @@ fn uint[] package_merge(uint[] freqs, uint max_bits, Allocator allocator) => @po
 	for (usz i = 0; i < num_analyze; i++) hist[i]++;
 
 	// Remap to correct indices
-	uint[] code_length = allocator::new_array(allocator, uint, freqs.len);
+	char[] code_length = allocator::new_array(allocator, char, freqs.len);
 	foreach (i, m: mappings)
 	{
-		code_length[m.index] = hist[i];
+		code_length[m.index] = (char)hist[i];
 	}
 
 	return code_length;
@@ -814,7 +870,7 @@ fn uint[] package_merge(uint[] freqs, uint max_bits, Allocator allocator) => @po
 fn void test_package_merge_fn() @test => @pool()
 {
 	uint[] freqs = {4,4,4,0,3,2,1};
-	uint[] counts = package_merge(freqs, 5, tmem);
+	char[] counts = package_merge(freqs, 5, tmem);
 	assert(freqs.len == counts.len);
 	assert(counts == {2,2,2,0,3,4,4});
 }
