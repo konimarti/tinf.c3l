@@ -1,6 +1,7 @@
 module rfc;
 import std::io, std::encoding, std::collections, tinf;
 
+const BITS = 8;
 struct DynamicBitList (Printable)
 {
 	List{char} list;
@@ -18,8 +19,8 @@ fn usz? DynamicBitList.to_format(&self, Formatter *f) @dynamic => @pool()
 enum BitState { UNSET, SET }
 fn void DynamicBitList.push_bit(&self, BitState bit)
 {
-	usz index = self.pos / 8;
-	usz offset = self.pos % 8;
+	usz index = self.pos / BITS;
+	usz offset = self.pos % BITS;
 	if (index >= self.list.len()) self.list.push(0);
 
 	char b = self.list[index];
@@ -38,14 +39,9 @@ macro BitState get_bit_state(uint b, isz pos)
 }
 
 <*
- TODO: Implement a bit reversal when generating the huff code; then we can
- avoid lsb
-
- TODO: Also, push entire bytes in one go instead of individual bits
-
  @param bits     : "Bits to be pushed"
  @param num_bits : "Number of bits to push"
- @require num_bits > 0   : "Number of bits must be at least 1"
+ @require num_bits >= 1  : "Number of bits must be at least 1"
  @require num_bits <= 32 : "Number of bits can not be larger than 32"
 *>
 fn void DynamicBitList.push(&self, uint bits, isz num_bits)
@@ -62,10 +58,10 @@ fn void DynamicBitList.push(&self, uint bits, isz num_bits)
 	bits &= (1U << num_bits) - 1;
 
 	consumed = 0;
-	offset = self.pos % 8;
+	offset = self.pos % BITS;
 	if (offset > 0)
 	{
-		n = 8 - offset;
+		n = BITS - offset;
 		if (n > num_bits) n = num_bits;
 		self.list[^1] |= (char)((bits<<offset) & 0xff);
 		bits >>= n;
@@ -76,7 +72,7 @@ fn void DynamicBitList.push(&self, uint bits, isz num_bits)
 	while (num_bits > 0)
 	{
 		self.list.push((char)(bits & 0xFF));
-		n = (num_bits > 8) ? 8 : num_bits;
+		n = (num_bits > BITS) ? BITS : num_bits;
 		bits >>= n;
 		consumed += n;
 		num_bits -= n;
@@ -127,7 +123,7 @@ fn void main() => @pool()
 
 	// test_huff_tree();
 	// test_package_merge();
-	// test_lz77();
+	test_lz77();
 	// no_compression();
 	fixed_huff();
 	// dynamic_huff();
@@ -636,7 +632,7 @@ fn char[] huff_bit_counts(uint[] freqs, char max_bits)
 	// io::printfn("huff_bit_counts: counts=%s", counts);
 
 	// Remove depth from dummy node
-	char off = (char)(math::log2(max_bits - 1)+0.5);
+	char off = (char)(math::log2(max_bits - 1)+0.5); // TODO: math::ceil
 	foreach (&count: counts) if (*count > off) *count -= off;
 
 	// io::printfn("huff_bit_counts: counts=%s", counts);
@@ -928,14 +924,15 @@ fn usz? Token.to_format(&self, Formatter *f) @dynamic
 	}
 }
 
-union HashKey (Printable)
+const uint HASH_MASK = (1U << 16) - 1;
+alias HashKey  = ushort;
+fn HashKey lz77_hash(char[3] b)
 {
-	char[3] key;
-	uint    h;
+	uint x = (b[0] << 16) | (b[1] << 8) | b[2];
+	x ^= x >> 12;
+	x ^= x << 5;
+	return (HashKey)(x & HASH_MASK);
 }
-fn uint HashKey.hash(&self) => self.h;
-fn bool HashKey.equals(&self, HashKey other) => self.h == other.h;
-fn usz? HashKey.to_format(&self, Formatter *f) @dynamic => f.printf("%s", (String)self.key[..]);
 
 alias HashChain = LinkedList{ isz };
 alias MatchPair = Pair{uint, ushort};
@@ -990,6 +987,14 @@ fn MatchPair find_max_match(HashChain *chain, String s, usz i) @private @inline
 	return {max_match_off, (max_match_len > MAX_MATCH_LEN) ? MAX_MATCH_LEN : max_match_len};
 }
 
+fn HashChain make_hash_chain(Allocator allocator, usz... elements)
+{
+	HashChain chain;
+	chain.init(allocator);
+	chain.push_all(elements);
+	return chain;
+}
+
 fn Token[] lz77_tokenize(Allocator allocator, String s) => @pool()
 {
 	usz i;
@@ -1006,7 +1011,7 @@ fn Token[] lz77_tokenize(Allocator allocator, String s) => @pool()
 	// Prepare hash and process input.
 	for (i = 0; i < s.len - 2; i++)
 	{
-		HashKey key = {.key = s[i:3]};
+		HashKey key = lz77_hash(s[i:3]);
 		if (!hash.has_key(key))
 		{
 			// No hit: it's a literal!
@@ -1014,10 +1019,7 @@ fn Token[] lz77_tokenize(Allocator allocator, String s) => @pool()
 			tokens.push(make_literal(s[i]));
 
 			// Store current hash in a new hash chain.
-			HashChain chain;
-			chain.tinit();
-			chain.push_front(i);
-			hash[key] = chain;
+			hash.set(key, make_hash_chain(tmem, i));
 			continue;
 		}
 
@@ -1033,7 +1035,7 @@ fn Token[] lz77_tokenize(Allocator allocator, String s) => @pool()
 		if (i + 3 + 1 < s.len)
 		{
 			// "Lazy Matching".
-			if (try alt_chain = hash.get_ref({.key = s[i+1:3]}))
+			if (try alt_chain = hash.get_ref(lz77_hash(s[i+1:3])))
 			{
 				alternative = find_max_match(alt_chain, s, i+1);
 				if (alternative.second > match.second) match = {};
@@ -1046,7 +1048,19 @@ fn Token[] lz77_tokenize(Allocator allocator, String s) => @pool()
 		{
 			// Emit match token.
 			tokens.push(make_match(len, offset));
-			i += len - 1L; // -1 because of increment in for-loop
+
+			usz end = i + len - 1L; // -1 because of increment in for-loop
+			for (; i < end; i++)
+			{
+				if (i + 3 >= s.len) continue;
+				HashKey k = lz77_hash(s[i:3]);
+				if (try alt_chain = hash.get_ref(k))
+				{
+					alt_chain.push_front(i);
+					continue;
+				}
+				hash.set(key, make_hash_chain(tmem, i));
+			}
 		}
 		else
 		{
