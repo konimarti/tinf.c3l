@@ -121,11 +121,11 @@ fn void main() => @pool()
 
 	foreach (i, b: bs.list) io::printfn("%d\t%08b", i, b);
 
-	// test_huff_tree();
+	test_huff_tree();
 	// test_package_merge();
 	// test_lz77();
-	uncompressed_block();
-	fixed_huff();
+	// uncompressed_block();
+	// fixed_huff();
 	// dynamic_huff();
 }
 
@@ -142,8 +142,8 @@ fn void uncompressed_block() => @pool()
 	// char[] input = "hello world";
 	// char[] input = "12";
 
-	// char[1024] input;
-	char[] input = mem::temp_array(char, MAX_BLOCK_SIZE + 8);
+	char[1024] input;
+	// char[] input = mem::temp_array(char, MAX_BLOCK_SIZE + 8);
 	foreach (i, &e : input) *e = (char)(i % 255);
 
 	char[] encoded = uncompressed_block_encode(input[..], tmem);
@@ -634,7 +634,7 @@ fn char[] huff_bit_counts(uint[] freqs, char max_bits)
 	// io::printfn("huff_bit_counts: counts=%s", counts);
 
 	// Remove depth from dummy node
-	char off = (char)(math::log2(max_bits - 1)+0.5); // TODO: math::ceil
+	char off = (char)math::ceil(math::log2(max_bits - 1));
 	foreach (&count: counts) if (*count > off) *count -= off;
 
 	// io::printfn("huff_bit_counts: counts=%s", counts);
