@@ -72,19 +72,19 @@ fn void? uncompress(char[] dst, char[] src)
 	// Check room for at least 10 byte header and 8 byte trailer
 	if (src.len < 18)
 	{
-		return error::DATA_ERROR?;
+		return error::DATA_ERROR~;
 	}
 
 	// Check id bytes
 	if (src[0] != 0x1F || src[1] != 0x8B)
 	{
-		return error::DATA_ERROR?;
+		return error::DATA_ERROR~;
 	}
 
 	// Check method is deflate
 	if (src[2] != 8)
 	{
-		return error::DATA_ERROR?;
+		return error::DATA_ERROR~;
 	}
 
 	// Get flag byte
@@ -93,7 +93,7 @@ fn void? uncompress(char[] dst, char[] src)
 	// Check that reserved bits are zero
 	if (flg & 0xE0)
 	{
-		return error::DATA_ERROR?;
+		return error::DATA_ERROR~;
 	}
 
 	// -- Find start of compressed data --
@@ -108,7 +108,7 @@ fn void? uncompress(char[] dst, char[] src)
 
 		if (xlen > src.len - 12)
 		{
-			return error::DATA_ERROR?;
+			return error::DATA_ERROR~;
 		}
 
 		start += (isz)xlen + 2;
@@ -120,7 +120,7 @@ fn void? uncompress(char[] dst, char[] src)
 		do {
 			if (start - src.ptr >= src.len)
 			{
-				return error::DATA_ERROR?;
+				return error::DATA_ERROR~;
 			}
 		} while (*start++);
 	}
@@ -131,7 +131,7 @@ fn void? uncompress(char[] dst, char[] src)
 		do {
 			if (start - src.ptr >= src.len)
 			{
-				return error::DATA_ERROR?;
+				return error::DATA_ERROR~;
 			}
 		} while (*start++);
 	}
@@ -143,14 +143,14 @@ fn void? uncompress(char[] dst, char[] src)
 
 		if (start - src.ptr > (long)src.len - 2)
 		{
-			return error::DATA_ERROR?;
+			return error::DATA_ERROR~;
 		}
 
 		hcrc = read_le_16(start);
 
 		if (hcrc != (crc32::hash(src[:(start - src.ptr)]) & 0x0000FFFF))
 		{
-			return error::DATA_ERROR?;
+			return error::DATA_ERROR~;
 		}
 
 		start += 2;
@@ -162,7 +162,7 @@ fn void? uncompress(char[] dst, char[] src)
 
 	if (dlen > dst.len)
 	{
-		return error::BUF_ERROR?;
+		return error::BUF_ERROR~;
 	}
 
 	// -- Get CRC32 checksum of original data --
@@ -173,20 +173,20 @@ fn void? uncompress(char[] dst, char[] src)
 
 	if ((src.ptr + src.len) - start < 8)
 	{
-		return error::DATA_ERROR?;
+		return error::DATA_ERROR~;
 	}
 
 	inflate::uncompress(dst, start[:(uint)((src.ptr + src.len) - start - 8)])!;
 
 	if (dst.len != dlen)
 	{
-		return error::DATA_ERROR?;
+		return error::DATA_ERROR~;
 	}
 
 	// -- Check CRC32 checksum --
 
 	if (crc32 != crc32::hash(dst))
 	{
-		return error::DATA_ERROR?;
+		return error::DATA_ERROR~;
 	}
 }
